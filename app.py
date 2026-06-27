@@ -3,12 +3,16 @@ import requests
 
 app = Flask(__name__)
 
-# Наши доноры
 SOURCES = [
     "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
     "https://smarttvnews.ru/apps/iptvchannels.m3u",
     "https://denmsu.github.io/tv/tv.m3u"
 ]
+
+# Маскируемся под обычный браузер
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
 
 @app.route('/')
 def home():
@@ -21,7 +25,8 @@ def get_playlist():
     
     for source in SOURCES:
         try:
-            response = requests.get(source, timeout=10)
+            # Добавили заголовки (headers) и увеличили таймаут
+            response = requests.get(source, timeout=15, headers=HEADERS)
             response.raise_for_status()
             response.encoding = 'utf-8'
             
@@ -35,18 +40,17 @@ def get_playlist():
                 
                 if line.startswith("#EXTINF:"):
                     current_extinf = line + "\n"
-                elif line.startswith("http"):
-                    # Фильтруем дубликаты ссылок
+                # Некоторые трансляции могут начинаться с rtmp, добавим и их
+                elif line.startswith("http") or line.startswith("rtmp"): 
                     if line not in seen_urls:
                         seen_urls.add(line)
                         merged_content.append(current_extinf)
                         merged_content.append(line + "\n")
         except Exception as e:
-            print(f"Ошибка источника {source}: {e}")
+            # В логах Render теперь будет видно, если источник отвалился
+            print(f"Ошибка источника {source}: {e}", flush=True)
             
-    # Отдаем собранный текст с правильным заголовком, чтобы плееры поняли, что это плейлист
     return Response("".join(merged_content), mimetype='application/vnd.apple.mpegurl')
 
 if __name__ == '__main__':
-    # Порт 10000 часто используется по умолчанию на облачных платформах
     app.run(host='0.0.0.0', port=10000)
