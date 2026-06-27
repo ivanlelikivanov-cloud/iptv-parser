@@ -3,10 +3,11 @@ import requests
 
 app = Flask(__name__)
 
+# Наши новые живые доноры
 SOURCES = [
-    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
-    "https://smarttvnews.ru/apps/iptvchannels.m3u",
-    "https://denmsu.github.io/tv/tv.m3u"
+    "https://iptv-org.github.io/iptv/countries/ru.m3u",
+    "https://romaxa55.github.io/world_ip_tv/playlist.m3u",
+    "https://tva.org.ru/yandex.m3u"
 ]
 
 # Маскируемся под обычный браузер
