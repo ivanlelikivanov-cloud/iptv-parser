@@ -3,21 +3,22 @@ import requests
 
 app = Flask(__name__)
 
-# Наши новые живые доноры
+# Максимально стабильные источники на сегодня
 SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
-    "https://romaxa55.github.io/world_ip_tv/playlist.m3u",
-    "https://tva.org.ru/yandex.m3u"
+    "https://iptv-org.github.io/iptv/countries/ru_general.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u"
 ]
 
-# Маскируемся под обычный браузер
+# Маскировка под обычный браузер
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
 @app.route('/')
 def home():
-    return "Сервер IPTV работает! Твоя ссылка на плейлист: /playlist.m3u"
+    return "Сервер IPTV работает! Ссылка на плейлист: /playlist.m3u"
 
 @app.route('/playlist.m3u')
 def get_playlist():
@@ -26,7 +27,6 @@ def get_playlist():
     
     for source in SOURCES:
         try:
-            # Добавили заголовки (headers) и увеличили таймаут
             response = requests.get(source, timeout=15, headers=HEADERS)
             response.raise_for_status()
             response.encoding = 'utf-8'
@@ -41,14 +41,12 @@ def get_playlist():
                 
                 if line.startswith("#EXTINF:"):
                     current_extinf = line + "\n"
-                # Некоторые трансляции могут начинаться с rtmp, добавим и их
                 elif line.startswith("http") or line.startswith("rtmp"): 
                     if line not in seen_urls:
                         seen_urls.add(line)
                         merged_content.append(current_extinf)
                         merged_content.append(line + "\n")
         except Exception as e:
-            # В логах Render теперь будет видно, если источник отвалился
             print(f"Ошибка источника {source}: {e}", flush=True)
             
     return Response("".join(merged_content), mimetype='application/vnd.apple.mpegurl')
