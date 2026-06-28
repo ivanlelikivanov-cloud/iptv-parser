@@ -13,22 +13,38 @@ import psutil
 # КОНФИГУРАЦИЯ
 # ==========================================
 SOURCES = [
+    # Основные + Региональные Россия (часовые пояса)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/countries/ru_general.m3u",
+    "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
+    
+    # Часовые пояса России
+    "https://iptv-org.github.io/iptv/regions/ru-mos.m3u",      # Москва (MSK)
+    "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",      # Санкт-Петербург
+    "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",     # Урал (+2..+3)
+    "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",      # Сибирь
+    "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u", # Дальний Восток
+    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
+
+    # Дополнительные сильные источники
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/world.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/channels.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
+    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/tkashkin/iptv/master/ru.m3u",
 ]
 
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-
-UPDATE_INTERVAL = int(os.environ.get('UPDATE_INTERVAL', 1800))
-MAX_WORKERS_FETCH = 6
-MAX_CHANNELS_TO_CHECK = int(os.environ.get('MAX_CHANNELS_TO_CHECK', 300))
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+}
 
 app = Flask(__name__)
 state_lock = threading.Lock()
@@ -46,7 +62,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# ПАРСИНГ И ДЕДУПЛИКАЦИЯ
+# ПАРСИНГ
 # ==========================================
 def parse_m3u(content):
     channels = []
@@ -73,8 +89,8 @@ def parse_m3u(content):
 def deduplicate_channels(channels):
     seen = {}
     for ch in channels:
-        key = ch['attrs'].get('tvg-id') or ch['attrs'].get('tvg-name') or ch['url']
-        if key and (key not in seen or ch.get('is_alive')):
+        key = ch['attrs'].get('tvg-id') or ch['attrs'].get('tvg-name') or ch.get('url')
+        if key and key not in seen:
             seen[key] = ch
     return list(seen.values())
 
@@ -93,12 +109,12 @@ def check_stream_health(channels):
             pass
         return None
 
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        futures = [executor.submit(check, ch) for ch in channels[:MAX_CHANNELS_TO_CHECK]]
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(check, ch) for ch in channels[:400]]
         for future in as_completed(futures):
-            result = future.result()
-            if result:
-                alive.append(result)
+            res = future.result()
+            if res:
+                alive.append(res)
     return alive
 
 # ==========================================
@@ -122,7 +138,7 @@ def background_updater():
             alive = check_stream_health(unique)
 
             with state_lock:
-                global_channels = alive + [ch for ch in unique if ch not in alive][:800]
+                global_channels = alive + unique[:1200]
                 stats_cache.update({
                     "total_channels": len(unique),
                     "alive_channels": len(alive),
@@ -130,35 +146,41 @@ def background_updater():
                     "update_duration": round(time.time() - start, 1),
                     "memory_usage_mb": round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 1)
                 })
-            logger.info(f"Обновлено: {len(unique)} каналов, живых: {len(alive)}")
+            logger.info(f"Обновлено: {len(unique)} каналов | Живых: {len(alive)}")
         except Exception as e:
-            logger.error(f"Updater error: {e}")
+            logger.error(f"Ошибка обновления: {e}")
         
-        time.sleep(UPDATE_INTERVAL)
+        time.sleep(1800)  # 30 минут
 
-# ==========================================
-# ЗАПУСК
-# ==========================================
+# Запуск обновления
 threading.Thread(target=background_updater, daemon=True).start()
 
 # ==========================================
-# РОУТЫ
+# ДАШБОРД
 # ==========================================
 @app.route('/')
 def dashboard():
     with state_lock:
         stats = stats_cache.copy()
-    return render_template_string(DASHBOARD_HTML, stats=stats)  # используй свой HTML
+    html = f"""
+    <h1>IPTV Aggregator Pro</h1>
+    <p><strong>Всего каналов:</strong> {stats['total_channels']}</p>
+    <p><strong>Живых стримов:</strong> {stats['alive_channels']}</p>
+    <p><strong>Последнее обновление:</strong> {stats['last_update']}</p>
+    <hr>
+    <a href="/playlist.m3u" style="font-size:20px">📥 Скачать плейлист</a>
+    """
+    return html
 
 @app.route('/playlist.m3u')
 def get_playlist():
     with state_lock:
-        channels = global_channels[:1500]  # лимит для стабильности
+        channels = global_channels[:1500]
     
     lines = ["#EXTM3U"]
     for ch in channels:
-        attrs = " ".join([f'{k}="{v}"' for k,v in ch['attrs'].items() if v])
-        lines.append(f"#EXTINF:{ch['duration']} {attrs},{ch['name']}")
+        attrs_str = " ".join([f'{k}="{v}"' for k, v in ch['attrs'].items() if v])
+        lines.append(f"#EXTINF:{ch['duration']} {attrs_str},{ch['name']}")
         lines.append(ch['url'])
     
     return Response("\n".join(lines), mimetype='application/vnd.apple.mpegurl')
