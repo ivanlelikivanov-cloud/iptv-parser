@@ -3,25 +3,20 @@ import requests
 
 app = Flask(__name__)
 
-# Расширенный список источников
+# Полный список, включая m3u.su и все проверенные доноры
 SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/countries/ru_general.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru_general.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/channels.m3u",
+    "https://m3u.su/m3u/sng.m3u",
+    "https://m3u.su/m3u/world.m3u",
+    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://smarttvnews.ru/apps/iptvchannels.m3u",
-    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
-    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u"
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u"
 ]
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 }
-
-@app.route('/')
-def home():
-    return "IPTV Server Online. Playlist: /playlist.m3u"
 
 @app.route('/playlist.m3u')
 def get_playlist():
@@ -30,9 +25,11 @@ def get_playlist():
     
     for source in SOURCES:
         try:
-            response = requests.get(source, timeout=10, headers=HEADERS)
-            response.raise_for_status()
-            
+            # Установили жесткий таймаут, чтобы не ждать вечно
+            response = requests.get(source, timeout=8, headers=HEADERS)
+            if response.status_code != 200:
+                continue
+                
             lines = response.text.splitlines()
             current_extinf = ""
             
@@ -43,13 +40,13 @@ def get_playlist():
                 
                 if line.startswith("#EXTINF:"):
                     current_extinf = line + "\n"
-                elif line.startswith("http") or line.startswith("rtmp"): 
+                elif line.startswith("http"): 
                     if line not in seen_urls:
                         seen_urls.add(line)
                         merged_content.append(current_extinf)
                         merged_content.append(line + "\n")
-        except Exception:
-            continue # Молча пропускаем битые ссылки, чтобы не засирать логи
+        except:
+            continue
             
     return Response("".join(merged_content), mimetype='application/vnd.apple.mpegurl')
 
