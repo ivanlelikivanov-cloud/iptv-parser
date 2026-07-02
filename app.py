@@ -7,9 +7,9 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== ЛУЧШИЕ ИСТОЧНИКИ 2026 ====================
+# ==================== МАКСИМАЛЬНЫЕ ИСТОЧНИКИ ====================
 SOURCES = [
-    # 1. IPTV-org — лучший бесплатный проект
+    # IPTV-ORG (основные + регионы)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -19,22 +19,25 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
 
-    # 2. Free-TV IPTV
-    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
-
-    # 3. IPTV-RUS и аналоги
+    # GitHub + другие крупные сборки
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://m3u.su/m3u/sng.m3u",
-    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
     "https://m3u.su/m3u/ru_4k.m3u",
+    "https://m3u.su/m3u/ru_sport.m3u",
+    "https://m3u.su/m3u/ru_kino.m3u",
+    "https://m3u.su/m3u/ru_deti.m3u",
 ]
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro\n"
+playlist_cache = "#EXTM3U\n# IPTV Russia Pro - Максимум каналов\n"
 cache_time = 0
 
 logging.basicConfig(level=logging.INFO)
@@ -42,8 +45,8 @@ logger = logging.getLogger(__name__)
 
 def update_cache():
     global playlist_cache, cache_time
-    logger.info("🔄 Обновление плейлиста...")
-    lines = ["#EXTM3U", "# IPTV Russia Pro — Лучшие источники 2026"]
+    logger.info("🔄 Загрузка плейлиста...")
+    lines = ["#EXTM3U", "# IPTV Russia Pro - Максимум"]
     seen = set()
     count = 0
 
