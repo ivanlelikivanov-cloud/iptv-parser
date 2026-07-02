@@ -1,11 +1,16 @@
-import os, re, time, logging, threading, requests
-from flask import Flask, Response
+import os
+import re
+import time
+import logging
+import threading
+import requests
+from flask import Flask, Response, jsonify
 
 app = Flask(__name__)
 
 # ==================== КАЧЕСТВЕННЫЕ ИСТОЧНИКИ ====================
 SOURCES = [
-    # IPTV-ORG — основной источник (ежедневное обновление)
+    # IPTV-ORG — лучший проект
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -14,67 +19,27 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
-    
-    # Категории IPTV-ORG
-    "https://iptv-org.github.io/iptv/categories/news.m3u",
-    "https://iptv-org.github.io/iptv/categories/movies.m3u",
-    "https://iptv-org.github.io/iptv/categories/sports.m3u",
-    "https://iptv-org.github.io/iptv/categories/music.m3u",
-    "https://iptv-org.github.io/iptv/categories/kids.m3u",
-    
-    # Free-TV IPTV — стабильные потоки
+    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+
+    # Free-TV + GitHub
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
-    
-    # IPTV-RUS — с EPG и регионами
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/sat-iptv/iptv/main/ru.m3u",
-    
-    # AndroidTVSoft / M3U.SU — федеральные и региональные
+    "https://raw.githubusercontent.com/playlist-for-free/IPTV/main/ru.m3u",
+
+    # M3U.SU + другие
+    "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
     "https://m3u.su/m3u/ru_4k.m3u",
     "https://m3u.su/m3u/ru_sport.m3u",
     "https://m3u.su/m3u/ru_kino.m3u",
-    "https://m3u.su/m3u/ru_news.m3u",
-    "https://m3u.su/m3u/sng.m3u",
-    
-    # Дополнительные проверенные
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
-    "https://raw.githubusercontent.com/playlist-for-free/IPTV/main/ru.m3u",
 ]
 
-# EPG для плееров (отдельная ссылка)
 EPG_URL = "https://iptv-org.github.io/epg/guides/ru/index.xml"
 
-# ==================== ФИЛЬТР РУССКИХ КАНАЛОВ ====================
-def is_russian_channel(name, attrs, url):
-    """Только русские каналы"""
-    lang = attrs.get('tvg-language', '').lower()
-    if lang in ['rus', 'ru', 'russian']:
-        return True
-    if re.search(r'[\u0400-\u04FF]', name):
-        exclude = ['.by/', '.ua/', '.kz/', '.am/', '.ge/', '.az/',
-                   'belarus', 'ukraine', 'kazakh', 'armenia', 'georgia']
-        if any(x in url.lower() or x in name.lower() for x in exclude):
-            return False
-        return True
-    return False
-
-def get_category(name):
-    """Авто-категория"""
-    n = name.lower()
-    if any(k in n for k in ['новости', 'news', '24', 'vesti']): return 'Новости'
-    elif any(k in n for k in ['кино', 'movie', 'film', 'сериал']): return 'Кино'
-    elif any(k in n for k in ['музыка', 'music', 'хит', 'radio']): return 'Музыка'
-    elif any(k in n for k in ['спорт', 'sport', 'футбол']): return 'Спорт'
-    elif any(k in n for k in ['дет', 'kids', 'мульт']): return 'Детские'
-    elif any(k in n for k in ['докум', 'doc']): return 'Документальные'
-    else: return 'Общие'
-
-# ==================== КЭШ ====================
 playlist_cache = "#EXTM3U\n"
 cache_lock = threading.Lock()
 stats = {"total": 0, "sources_ok": 0, "epg": EPG_URL}
@@ -82,16 +47,38 @@ stats = {"total": 0, "sources_ok": 0, "epg": EPG_URL}
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
+def is_russian_channel(name, attrs, url):
+    name_lower = name.lower()
+    lang = attrs.get('tvg-language', '').lower()
+    if lang in ['rus', 'ru', 'russian']:
+        return True
+    if re.search(r'[\u0400-\u04FF]', name):
+        return True
+    return False
+
+def get_category(name):
+    n = name.lower()
+    if any(k in n for k in ['новости', 'news', '24', 'vesti']):
+        return 'Новости'
+    elif any(k in n for k in ['кино', 'movie', 'film', 'сериал']):
+        return 'Кино'
+    elif any(k in n for k in ['музыка', 'music', 'хит', 'radio']):
+        return 'Музыка'
+    elif any(k in n for k in ['спорт', 'sport', 'футбол']):
+        return 'Спорт'
+    elif any(k in n for k in ['дет', 'kids', 'мульт']):
+        return 'Детские'
+    return 'Общие'
+
 def update_cache():
     global playlist_cache, stats
     logger.info("🔄 Сборка плейлиста...")
-    
+   
     lines = [
         "#EXTM3U",
         f"# 🇷🇺 IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}",
-        f"# Источников: {len(SOURCES)}",
         f"# EPG: {EPG_URL}",
-        "# Часовые пояса: настраиваются в плеере (TiviMate/OTT Navigator/Televizo)"
+        "# Часовые пояса настраиваются в плеере"
     ]
     seen_urls = set()
     seen_keys = set()
@@ -105,7 +92,6 @@ def update_cache():
                 ok_sources += 1
                 current_inf = None
                 current_attrs = {}
-                
                 for line in r.text.splitlines():
                     line = line.strip()
                     if line.startswith('#EXTINF:'):
@@ -152,45 +138,21 @@ time.sleep(15)
 def home():
     with cache_lock:
         s = stats.copy()
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>🇷🇺 IPTV</title>
-<style>body{{background:#0d1117;color:#c9d1d9;font-family:sans-serif;text-align:center;padding:40px}}
-h1{{color:#58a6ff}}.stat{{font-size:2.5rem;font-weight:bold;margin:15px}}
-a{{color:#58a6ff}}.info{{color:#6e7681;font-size:0.9rem;margin-top:30px}}</style></head><body>
-<h1>🇷🇺 IPTV Russia Pro</h1>
-<div class="stat" style="color:#2ea043">{s['total']}</div><div>Русских каналов</div>
-<div class="stat" style="color:#f093fb">{s['sources_ok']}</div><div>Рабочих источников</div>
-<p><a href="/playlist.m3u" style="font-size:1.3rem">📥 Скачать плейлист M3U</a></p>
-<div class="info">
-<p>📺 EPG: <code>{s['epg']}</code></p>
-<p>🕐 Часовые пояса: настраиваются в плеере (TiviMate / OTT Navigator / Televizo)</p>
-<p>🔄 Автообновление: каждые 30 минут</p>
-</div>
-</body></html>"""
+    return f"""
+    <h1>🇷🇺 IPTV Russia Pro</h1>
+    <p>Каналов: <b>{s['total']}</b></p>
+    <p>Источников: <b>{s['sources_ok']}</b></p>
+    <p>EPG: <a href="{s['epg']}">Скачать</a></p>
+    <p><a href="/playlist.m3u">📥 Скачать M3U</a></p>
+    """
 
 
 @app.route('/playlist.m3u')
 def playlist():
     with cache_lock:
-        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl',
-                       headers={'Content-Disposition': 'attachment; filename=iptv_ru.m3u'})
-
-
-@app.route('/epg.xml')
-def epg():
-    """Проксирование EPG"""
-    try:
-        r = requests.get(EPG_URL, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
-        return Response(r.text, mimetype='application/xml')
-    except:
-        return Response("<!-- EPG unavailable -->", mimetype='application/xml')
-
-
-@app.route('/api/stats')
-def api_stats():
-    with cache_lock:
-        return stats
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
 
 if __name__ == '__main__':
-    logger.info(f"🚀 Запуск... {len(SOURCES)} качественных источников")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)), threaded=True)
+    logger.info(f"🚀 Запуск... {len(SOURCES)} источников")
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
