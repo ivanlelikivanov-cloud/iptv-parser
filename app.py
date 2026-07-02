@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 # ==================== 100+ ИСТОЧНИКОВ ====================
 SOURCES = [
-    # IPTV-ORG Россия
+    # IPTV-ORG Россия (15)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -21,9 +21,8 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
-    "https://iptv-org.github.io/iptv/categories/kids.m3u",
     
-    # GitHub репозитории
+    # GitHub репозитории (30)
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
@@ -46,8 +45,16 @@ SOURCES = [
     "https://raw.githubusercontent.com/IPTV-Russia/main/channels.m3u",
     "https://raw.githubusercontent.com/Ru-Channels/iptv/master/playlist.m3u",
     "https://raw.githubusercontent.com/IPTV-Free-RU/main/channels.m3u",
+    "https://raw.githubusercontent.com/IPTV-List/main/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    "https://raw.githubusercontent.com/LaurentCrozat/IPTV-Web-Player/master/channels.m3u",
+    "https://raw.githubusercontent.com/iptv/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/IPTV-Organizer/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/Russian-IPTV/iptv/master/channels.m3u",
+    "https://raw.githubusercontent.com/Free-IPTV-RU/iptv/main/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-playlist/ru/main/channels.m3u",
     
-    # M3U.SU
+    # M3U.SU коллекции (15)
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
     "https://m3u.su/m3u/ru_4k.m3u",
@@ -64,7 +71,7 @@ SOURCES = [
     "https://m3u.su/m3u/ru_zdorove.m3u",
     "https://m3u.su/m3u/ru_mir.m3u",
     
-    # Прямые ссылки
+    # Прямые ссылки (25)
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
     "https://iptv.jatv.online/playlist.m3u",
     "https://iptv.best/playlist/ru.m3u",
@@ -90,44 +97,36 @@ SOURCES = [
     "https://tv-channels.ru/playlist.m3u",
     "https://russian-tv.online/channels.m3u",
     "https://iptv-world.net/ru.m3u",
-    "https://free-tv.ru/playlist.m3u",
-    "https://iptv-hd.net/ru.m3u",
-    "https://tv-online.ru/channels.m3u",
-    "https://iptv-free.org/ru.m3u",
-    "https://russian-channels.net/playlist.m3u",
-    "https://iptv-live.net/ru.m3u",
-    "https://tv-playlist.ru/channels.m3u",
-    "https://iptv-db.net/ru.m3u",
-    "https://free-channels.ru/playlist.m3u",
     
-    # СНГ (русскоязычные)
+    # СНГ русскоязычные (10)
     "https://iptv-org.github.io/iptv/countries/by.m3u",
     "https://iptv-org.github.io/iptv/countries/kz.m3u",
     "https://iptv-org.github.io/iptv/languages/ukr.m3u",
     "https://iptv-org.github.io/iptv/countries/ua.m3u",
     "https://raw.githubusercontent.com/Belarus-IPTV/iptv/main/by.m3u",
     "https://raw.githubusercontent.com/Kazakhstan-IPTV/iptv/main/kz.m3u",
+    "https://raw.githubusercontent.com/Ukraine-IPTV/iptv/main/ua.m3u",
+    "https://iptv-belarus.by/playlist.m3u",
+    "https://iptv-kz.net/playlist.m3u",
+    "https://iptv-ua.online/channels.m3u",
 ]
 
 # ==================== ФИЛЬТР РУССКИХ КАНАЛОВ ====================
-def is_russian_channel(name, attrs, url):
-    """Строгая проверка: только русские каналы"""
-    # 1. Язык
+def is_russian(name, attrs, url):
+    """Только русские каналы"""
     lang = attrs.get('tvg-language', '').lower()
     if lang in ['rus', 'ru', 'russian']:
         return True
-    # 2. Кириллица в названии
     if re.search(r'[\u0400-\u04FF]', name):
-        # Исключаем страны СНГ
-        exclude = ['.by/', '.ua/', '.kz/', '.am/', '.ge/', '.az/',
-                   'belarus', 'ukraine', 'kazakh', 'armenia', 'georgia', 'azerbaijan']
+        exclude = ['.by/', '.ua/', '.kz/', '.am/', '.ge/', '.az/', 
+                   'belarus', 'ukraine', 'kazakh', 'armenia', 'georgia']
         if any(x in url.lower() or x in name.lower() for x in exclude):
             return False
         return True
     return False
 
 def get_category(name):
-    """Авто-категория по названию"""
+    """Авто-категория"""
     n = name.lower()
     if any(k in n for k in ['новости', 'news', '24', 'vesti', 'информ']): return 'Новости'
     elif any(k in n for k in ['кино', 'movie', 'film', 'сериал']): return 'Кино'
@@ -140,29 +139,27 @@ def get_category(name):
 # ==================== КЭШ ====================
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro\n"
 cache_lock = threading.Lock()
-stats = {"total": 0, "sources_ok": 0}
+stats = {"total": 0, "sources": 0}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
 def update_cache():
     global playlist_cache, stats
-    logger.info("🔄 Обновление плейлиста...")
+    logger.info("🔄 Сборка плейлиста...")
     
     lines = ["#EXTM3U", f"# 🇷🇺 IPTV Russia Pro - {time.strftime('%Y-%m-%d %H:%M')}"]
     seen_urls = set()
     seen_keys = set()
     count = 0
-    ok_sources = 0
-
+    success = 0
+    
     for url in SOURCES:
         try:
             r = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            if r.status_code == 200:
-                ok_sources += 1
+            if r.ok:
+                success += 1
                 current_inf = None
-                current_attrs = {}
-                
                 for line in r.text.splitlines():
                     line = line.strip()
                     if line.startswith('#EXTINF:'):
@@ -170,16 +167,13 @@ def update_cache():
                         if match:
                             attrs = dict(re.findall(r'([a-zA-Z0-9-]+)="([^"]*)"', match.group(1)))
                             name = match.group(2).strip()
-                            # Фильтр + категория
-                            if is_russian_channel(name, attrs, url):
+                            if is_russian(name, attrs, url):
                                 if 'group-title' not in attrs:
                                     attrs['group-title'] = get_category(name)
-                                current_attrs = attrs
                                 current_inf = f"#EXTINF:-1 {' '.join(f'{k}=\"{v}\"' for k,v in attrs.items())},{name}"
                     elif current_inf and line.startswith('http'):
                         ch_url = line.split()[0]
-                        key = current_attrs.get('tvg-id') or current_attrs.get('tvg-name') or ch_url
-                        # Дедупликация
+                        key = attrs.get('tvg-id') or attrs.get('tvg-name') or ch_url
                         if ch_url not in seen_urls and key not in seen_keys:
                             seen_urls.add(ch_url)
                             seen_keys.add(key)
@@ -187,56 +181,51 @@ def update_cache():
                             lines.append(ch_url)
                             count += 1
                         current_inf = None
-                        current_attrs = {}
         except Exception as e:
             logger.debug(f"❌ {url[:40]}: {e}")
-
+    
     with cache_lock:
         playlist_cache = "\n".join(lines)
-        stats = {"total": count, "sources_ok": ok_sources}
-
-    logger.info(f"✅ {count} RU каналов из {ok_sources} источников")
-
+        stats = {"total": count, "sources": success}
+    
+    logger.info(f"✅ {count} RU каналов из {success} источников")
 
 def background_update():
     while True:
         update_cache()
-        time.sleep(1800)
-
+        time.sleep(3600)
 
 threading.Thread(target=background_update, daemon=True).start()
-time.sleep(15)  # Ждём первую загрузку
+time.sleep(15)
 
-
+# ==================== ROUTES ====================
 @app.route('/')
 def home():
     with cache_lock:
-        s = stats.copy()
-    return f"""
-    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>🇷🇺 IPTV</title>
-    <style>body{{background:#0d1117;color:#c9d1d9;font-family:sans-serif;text-align:center;padding:50px}}
-    h1{{color:#58a6ff}}.stat{{font-size:3rem;font-weight:bold;margin:20px}}
-    a{{color:#58a6ff;font-size:1.5rem}}</style></head><body>
-    <h1>🇷🇺 IPTV Russia Pro</h1>
-    <div class="stat" style="color:#2ea043">{s['total']}</div><div>Русских каналов</div>
-    <div class="stat" style="color:#f093fb">{s['sources_ok']}</div><div>Источников</div>
-    <p><a href="/playlist.m3u">📥 Скачать плейлист M3U</a></p>
-    <small style="color:#6e7681">Обновлено: {time.strftime('%H:%M')}</small>
-    </body></html>"""
-
+        return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>🇷🇺 IPTV</title>
+        <style>body{{background:#0d1117;color:#c9d1d9;font-family:sans-serif;text-align:center;padding:50px}}
+        h1{{color:#58a6ff}}.stat{{font-size:3rem;font-weight:bold;margin:20px}}
+        a{{color:#58a6ff;font-size:1.5rem}}</style></head><body>
+        <h1>🇷🇺 IPTV Russia Pro</h1>
+        <div class="stat" style="color:#2ea043">{stats['total']}</div><div>Русских каналов</div>
+        <div class="stat" style="color:#f093fb">{stats['sources']}</div><div>Источников</div>
+        <p><a href="/playlist.m3u">📥 Скачать плейлист M3U</a></p>
+        <small style="color:#6e7681">Обновлено: {time.strftime('%H:%M')}</small>
+        </body></html>"""
 
 @app.route('/playlist.m3u')
 def playlist():
+    if time.time() - getattr(app, '_last_update', 0) > 600:
+        app._last_update = time.time()
+        threading.Thread(target=update_cache, daemon=True).start()
     with cache_lock:
         return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl',
                        headers={'Content-Disposition': 'attachment; filename=iptv_ru.m3u'})
 
-
 @app.route('/api/stats')
 def api_stats():
     with cache_lock:
-        return {"total": stats['total'], "sources_ok": stats['sources_ok'], "updated": time.strftime('%H:%M')}
-
+        return {"total": stats['total'], "sources": stats['sources'], "updated": time.strftime('%H:%M')}
 
 if __name__ == '__main__':
     logger.info(f"🚀 Запуск... {len(SOURCES)} источников")
