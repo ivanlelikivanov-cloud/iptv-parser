@@ -9,9 +9,8 @@ from flask import Flask, Response, jsonify, request, render_template_string
 import requests
 import psutil
 
-# ==================== ТОЛЬКО РУССКИЕ ИСТОЧНИКИ ====================
+# ==================== ИСТОЧНИКИ ====================
 SOURCES = [
-    # IPTV-ORG — РФ регионы
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -28,8 +27,6 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
     "https://iptv-org.github.io/iptv/categories/kids.m3u",
-    
-    # Community
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
@@ -58,7 +55,15 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 state_lock = threading.Lock()
 global_channels = []
-stats_cache = {"total": 0, "alive": 0, "categories": 0, "last_update": "", "memory": 0, "sources": len(SOURCES)}
+stats_cache = {
+    "total": 0, 
+    "alive": 0, 
+    "categories": 0, 
+    "last_update": "", 
+    "memory": 0, 
+    "sources": len(SOURCES),
+    "status": "initializing"
+}
 
 # ==================== ПАРСИНГ ====================
 def parse_m3u(content):
@@ -82,7 +87,6 @@ def parse_m3u(content):
                 }
         elif current and line.startswith('http'):
             current['url'] = line.split()[0]
-            # Если нет категории, пробуем определить из названия
             if 'group-title' not in current['attrs']:
                 current['attrs']['group-title'] = categorize_channel(current['name'])
             channels.append(current)
@@ -90,9 +94,7 @@ def parse_m3u(content):
     return channels
 
 def categorize_channel(name):
-    """Автоматическая категоризация канала по названию"""
     name_lower = name.lower()
-    
     if any(kw in name_lower for kw in ['новости', 'news', 'информ', '24', 'vesti']):
         return 'Новости'
     elif any(kw in name_lower for kw in ['кино', 'movie', 'film', 'сериал', 'кинопоказ']):
@@ -127,93 +129,99 @@ def check_channel(channel):
             channel['is_alive'] = True
             channel['latency_ms'] = round(latency, 1)
             return channel
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Error checking {url[:50]}: {e}")
     channel['is_alive'] = False
     return None
 
 # ==================== ОБНОВЛЕНИЕ ====================
 def update_playlist():
     global global_channels, stats_cache
-    while True:
-        start = time.time()
-        logger.info(f"🔄 Обновление RU-плейлиста ({len(SOURCES)} источников)...")
-        
-        all_ch = []
-        for url in SOURCES:
-            try:
-                r = requests.get(url, timeout=20, headers=HEADERS)
-                if r.status_code == 200:
-                    channels = parse_m3u(r.text)
-                    all_ch.extend(channels)
-                    logger.debug(f"  +{len(channels)} из {url.split('/')[-1][:40]}")
-            except Exception as e:
-                logger.error(f"❌ {url[:50]}: {e}")
-        
-        logger.info(f"📊 Загружено каналов: {len(all_ch)}")
-        
-        # Дедупликация
-        seen = {}
-        for ch in all_ch:
-            key = ch['attrs'].get('tvg-id') or ch['attrs'].get('tvg-name') or ch['url']
-            if key not in seen:
-                seen[key] = ch
-            elif not seen[key].get('attrs', {}).get('tvg-logo') and ch.get('attrs', {}).get('tvg-logo'):
-                seen[key] = ch
-        
-        unique = list(seen.values())
-        logger.info(f"✅ Уникальных: {len(unique)}")
-        
-        # Проверка живости
-        sample = unique[:800] if len(unique) > 800 else unique
-        logger.info(f"🔍 Проверка {len(sample)} каналов...")
-        
-        alive = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-            results = list(ex.map(check_channel, sample))
-            alive = [ch for ch in results if ch and ch.get('is_alive')]
-        
-        logger.info(f"🟢 Живых: {len(alive)}")
-        
-        # Сортировка
-        def score(ch):
-            s = 0
-            if ch.get('is_alive'): s += 1000
-            lat = ch.get('latency_ms', 9999)
-            if lat < 200: s += 500
-            elif lat < 500: s += 200
-            if ch.get('attrs', {}).get('tvg-logo'): s += 50
-            if 'hd' in ch.get('name', '').lower(): s += 30
-            if '4k' in ch.get('name', '').lower(): s += 60
-            return s
-        
-        sorted_ch = sorted(unique, key=score, reverse=True)
-        final = [ch for ch in sorted_ch if ch.get('is_alive')][:ALIVE_LIMIT] + \
-                [ch for ch in sorted_ch if not ch.get('is_alive')][:2000]
-        
-        # Категории
-        cats = set()
-        for ch in final:
-            group = ch.get('attrs', {}).get('group-title', 'Другое')
-            if group:
-                cats.add(group)
-        
-        with state_lock:
-            global_channels = final
-            stats_cache = {
-                "total": len(unique),
-                "alive": len(alive),
-                "categories": len(cats),
-                "last_update": datetime.now().strftime("%H:%M:%S"),
-                "memory": round(psutil.Process(os.getpid()).memory_info().rss / 1024**2, 1),
-                "sources": len(SOURCES),
-                "update_duration": round(time.time() - start, 1)
-            }
-        
-        logger.info(f"✨ Готово за {stats_cache['update_duration']}с | Всего: {stats_cache['total']} | 🟢: {stats_cache['alive']} | Категорий: {stats_cache['categories']} | RAM: {stats_cache['memory']}MB")
-        time.sleep(UPDATE_INTERVAL)
+    
+    start = time.time()
+    logger.info(f"🔄 Начало обновления ({len(SOURCES)} источников)...")
+    
+    with state_lock:
+        stats_cache["status"] = "loading"
+    
+    all_ch = []
+    for url in SOURCES:
+        try:
+            logger.debug(f"Загрузка: {url[:60]}...")
+            r = requests.get(url, timeout=20, headers=HEADERS)
+            if r.status_code == 200:
+                channels = parse_m3u(r.text)
+                all_ch.extend(channels)
+                logger.debug(f"  +{len(channels)} каналов")
+        except Exception as e:
+            logger.error(f"❌ Ошибка {url[:50]}: {e}")
+    
+    logger.info(f"📊 Загружено: {len(all_ch)} каналов")
+    
+    # Дедупликация
+    seen = {}
+    for ch in all_ch:
+        key = ch['attrs'].get('tvg-id') or ch['attrs'].get('tvg-name') or ch['url']
+        if key not in seen:
+            seen[key] = ch
+        elif not seen[key].get('attrs', {}).get('tvg-logo') and ch.get('attrs', {}).get('tvg-logo'):
+            seen[key] = ch
+    
+    unique = list(seen.values())
+    logger.info(f"✅ Уникальных: {len(unique)}")
+    
+    # Проверка живости
+    sample = unique[:800] if len(unique) > 800 else unique
+    logger.info(f"🔍 Проверка {len(sample)} каналов...")
+    
+    alive = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        results = list(ex.map(check_channel, sample))
+        alive = [ch for ch in results if ch and ch.get('is_alive')]
+    
+    logger.info(f"🟢 Живых: {len(alive)}")
+    
+    # Сортировка
+    def score(ch):
+        s = 0
+        if ch.get('is_alive'): s += 1000
+        lat = ch.get('latency_ms', 9999)
+        if lat < 200: s += 500
+        elif lat < 500: s += 200
+        if ch.get('attrs', {}).get('tvg-logo'): s += 50
+        if 'hd' in ch.get('name', '').lower(): s += 30
+        if '4k' in ch.get('name', '').lower(): s += 60
+        return s
+    
+    sorted_ch = sorted(unique, key=score, reverse=True)
+    final = [ch for ch in sorted_ch if ch.get('is_alive')][:ALIVE_LIMIT] + \
+            [ch for ch in sorted_ch if not ch.get('is_alive')][:2000]
+    
+    # Категории
+    cats = set(ch.get('attrs', {}).get('group-title', 'Другое') for ch in final)
+    
+    # ОБНОВЛЕНИЕ ГЛОБАЛЬНОГО СОСТОЯНИЯ
+    with state_lock:
+        global_channels = final.copy()  # Копируем список
+        stats_cache = {
+            "total": len(unique),
+            "alive": len(alive),
+            "categories": len(cats),
+            "last_update": datetime.now().strftime("%H:%M:%S"),
+            "memory": round(psutil.Process(os.getpid()).memory_info().rss / 1024**2, 1),
+            "sources": len(SOURCES),
+            "update_duration": round(time.time() - start, 1),
+            "status": "ready"
+        }
+    
+    logger.info(f"✨ Готово за {stats_cache['update_duration']}с | "
+               f"Всего: {stats_cache['total']} | 🟢: {stats_cache['alive']} | "
+               f"Категорий: {stats_cache['categories']} | Каналов в списке: {len(global_channels)}")
 
-threading.Thread(target=update_playlist, daemon=True).start()
+# ==================== ЗАПУСК ОБНОВЛЕНИЯ ====================
+logger.info("🚀 Запуск фонового обновления...")
+update_thread = threading.Thread(target=update_playlist, daemon=True)
+update_thread.start()
 
 # ==================== HTML ====================
 HTML = """<!DOCTYPE html>
@@ -230,9 +238,13 @@ body{background:#0d1117;color:#c9d1d9;font-family:system-ui,sans-serif}
 .ch-item:hover{background:#21262d}
 .badge-4k{background:linear-gradient(135deg,#667eea,#764ba2)}.badge-hd{background:linear-gradient(135deg,#f093fb,#f5576c)}
 .logo{width:60px;height:34px;object-fit:contain;background:#21262d;border-radius:4px}
+.status-badge{position:fixed;top:10px;right:10px;z-index:1000}
 </style></head><body>
+<div class="position-fixed top-0 end-0 p-3" style="z-index:1000">
+    <span id="statusBadge" class="badge bg-warning">Загрузка...</span>
+</div>
 <nav class="navbar navbar-dark border-bottom border-secondary"><div class="container">
-<a class="navbar-brand" href="#">🇷🇺 IPTV RU Pro <span class="badge bg-success">v3.1</span></a>
+<a class="navbar-brand" href="#">🇷🇺 IPTV RU Pro <span class="badge bg-success">v3.2</span></a>
 <div class="navbar-nav ms-auto">
 <a class="nav-link" href="/playlist.m3u"><i class="bi bi-download"></i> M3U</a>
 <a class="nav-link" href="#" onclick="refresh()"><i class="bi bi-arrow-clockwise"></i> Обновить</a>
@@ -254,26 +266,42 @@ body{background:#0d1117;color:#c9d1d9;font-family:system-ui,sans-serif}
 <span class="ms-2 text-muted" id="cnt">0 каналов</span></div>
 </div></div>
 <div class="card"><div class="card-header d-flex justify-content-between"><span>📺 Каналы</span><span class="badge bg-secondary" id="count">0</span></div>
-<div class="ch-list" id="list"></div></div>
+<div class="ch-list" id="list"><div class="text-center p-4"><div class="spinner-border text-primary" role="status"></div><p class="mt-2">Загрузка каналов...</p></div></div></div>
 </div>
 <script>
 let chs=[],filt=[],aliveOnly=false;
 async function loadStats(){
-    const r=await fetch('/api/stats'),s=await r.json();
-    document.getElementById('total').textContent=s.total;
-    document.getElementById('alive').textContent=s.alive;
-    document.getElementById('cats').textContent=s.categories;
-    document.getElementById('mem').textContent=s.memory;
-    document.getElementById('time').textContent=s.last_update;
-    document.getElementById('src').textContent=s.sources;
+    try{
+        const r=await fetch('/api/stats'),s=await r.json();
+        document.getElementById('total').textContent=s.total;
+        document.getElementById('alive').textContent=s.alive;
+        document.getElementById('cats').textContent=s.categories;
+        document.getElementById('mem').textContent=s.memory;
+        document.getElementById('time').textContent=s.last_update||'--:--';
+        document.getElementById('src').textContent=s.sources;
+        const badge=document.getElementById('statusBadge');
+        if(s.status==='ready'){badge.className='badge bg-success';badge.textContent='Готово';}
+        else if(s.status==='loading'){badge.className='badge bg-warning';badge.textContent='Загрузка...';}
+        else{badge.className='badge bg-info';badge.textContent='Старт...';}
+    }catch(e){console.error('Stats error:',e);}
 }
 async function loadCh(){
-    document.getElementById('list').innerHTML='<div class="text-center p-4">Загрузка...</div>';
-    const r=await fetch('/api/channels');chs=await r.json();
-    const cats=[...new Set(chs.map(c=>c.attrs?.['group-title']||'Другое').filter(Boolean))].sort();
-    const sel=document.getElementById('cat');sel.innerHTML='<option value="">Все категории</option>';
-    cats.forEach(c=>{const o=document.createElement('option');o.value=c.toLowerCase();o.textContent=c;sel.appendChild(o);});
-    filter();
+    try{
+        const r=await fetch('/api/channels');
+        chs=await r.json();
+        console.log('Loaded channels:',chs.length);
+        if(!chs.length){
+            document.getElementById('list').innerHTML='<div class="text-center p-4 text-warning"><i class="bi bi-exclamation-triangle fs-1"></i><p class="mt-2">Каналы еще загружаются. Подождите или нажмите "Обновить"</p></div>';
+            return;
+        }
+        const cats=[...new Set(chs.map(c=>c.attrs?.['group-title']||'Другое').filter(Boolean))].sort();
+        const sel=document.getElementById('cat');sel.innerHTML='<option value="">Все категории</option>';
+        cats.forEach(c=>{const o=document.createElement('option');o.value=c.toLowerCase();o.textContent=c;sel.appendChild(o);});
+        filter();
+    }catch(e){
+        console.error('Load error:',e);
+        document.getElementById('list').innerHTML='<div class="text-center p-4 text-danger"><i class="bi bi-x-circle fs-1"></i><p class="mt-2">Ошибка загрузки</p></div>';
+    }
 }
 function filter(){
     const srch=document.getElementById('search').value.toLowerCase();
@@ -311,6 +339,7 @@ document.body.appendChild(t);setTimeout(()=>t.remove(),2000);}
 function toggleAlive(){aliveOnly=!aliveOnly;document.getElementById('tgl').className=aliveOnly?'bi bi-toggle-on':'bi bi-toggle-off';filter();}
 function refresh(){fetch('/api/refresh',{method:'POST'});setTimeout(()=>{loadStats();loadCh();},2000);}
 setInterval(loadStats,30000);loadStats();loadCh();
+setInterval(loadCh,10000);
 </script></body></html>"""
 
 # ==================== ROUTES ====================
@@ -326,10 +355,12 @@ def api_stats():
 @app.route('/api/channels')
 def api_channels():
     with state_lock:
+        logger.info(f"API запрос каналов. В списке: {len(global_channels)}")
         return jsonify(global_channels)
 
 @app.route('/api/refresh', methods=['POST'])
 def api_refresh():
+    logger.info("Запрошено принудительное обновление")
     threading.Thread(target=update_playlist, daemon=True).start()
     return jsonify({'status': 'refreshing'})
 
@@ -339,22 +370,29 @@ def playlist():
     alive_only = request.args.get('alive', 'false').lower() == 'true'
     with state_lock:
         chs = global_channels.copy()
+    logger.info(f"Генерация M3U. Всего каналов: {len(chs)}")
     filtered = [c for c in chs if (not search or search in c['name'].lower()) and (not alive_only or c.get('is_alive'))]
     lines = ['#EXTM3U', f'# 🇷🇺 IPTV RU Pro', f'# Обновлено: {datetime.now().strftime("%Y-%m-%d %H:%M")}']
     for c in filtered:
         attr = ' '.join(f'{k}="{v}"' for k,v in c['attrs'].items() if v)
         lines.append(f"#EXTINF:-1 {attr},{c['name']}")
         lines.append(c['url'])
+    logger.info(f"M3U сгенерирован: {len(filtered)} каналов")
     return Response('\n'.join(lines), mimetype='application/vnd.apple.mpegurl')
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'channels': stats_cache.get('total', 0)})
+    with state_lock:
+        return jsonify({
+            'status': stats_cache.get('status', 'unknown'),
+            'channels': stats_cache.get('total', 0),
+            'alive': stats_cache.get('alive', 0),
+            'in_list': len(global_channels)
+        })
 
-# ==================== ЗАПУСК ====================
 if __name__ == '__main__':
-    logger.info("🚀 🇷🇺 IPTV RU Pro запускается...")
+    logger.info("🚀 🇺 IPTV RU Pro запускается...")
     logger.info(f"📡 Источников: {len(SOURCES)}")
-    logger.info(f"⚙️ Порт: 10000")
-    time.sleep(2)
+    logger.info(f"⚙️ Порт: {os.environ.get('PORT', 10000)}")
+    time.sleep(1)
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)), threaded=True)
