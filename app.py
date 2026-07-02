@@ -1,15 +1,15 @@
 import os
-import re
 import time
 import logging
 import threading
 import requests
-from flask import Flask, Response, jsonify
+from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== ИСТОЧНИКИ ====================
+# ==================== МАКСИМАЛЬНЫЕ ИСТОЧНИКИ ====================
 SOURCES = [
+    # IPTV-ORG (основные + регионы)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -20,44 +20,40 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
+
+    # GitHub + другие крупные сборки
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://m3u.su/m3u/sng.m3u",
+    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
     "https://m3u.su/m3u/ru_4k.m3u",
+    "https://m3u.su/m3u/ru_sport.m3u",
+    "https://m3u.su/m3u/ru_kino.m3u",
+    "https://m3u.su/m3u/ru_deti.m3u",
 ]
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro\n"
-cache_lock = threading.Lock()
-stats = {"total": 0, "sources_ok": 0}
+playlist_cache = "#EXTM3U\n# IPTV Russia Pro - Максимум каналов\n"
+cache_time = 0
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def is_russian_channel(name, attrs):
-    name_lower = name.lower()
-    if re.search(r'[\u0400-\u04FF]', name):  # Кириллица
-        return True
-    if attrs.get('tvg-language') in ['rus', 'ru']:
-        return True
-    return False
-
 def update_cache():
-    global playlist_cache, stats
-    logger.info("🔄 Обновление плейлиста...")
-    lines = ["#EXTM3U", "# IPTV Russia Pro"]
+    global playlist_cache, cache_time
+    logger.info("🔄 Загрузка плейлиста...")
+    lines = ["#EXTM3U", "# IPTV Russia Pro - Максимум"]
     seen = set()
     count = 0
-    ok_sources = 0
 
     for url in SOURCES:
         try:
-            r = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+            r = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
             if r.status_code == 200:
-                ok_sources += 1
-                inf = ""
                 for line in r.text.splitlines():
                     line = line.strip()
                     if line.startswith('#EXTINF:'):
@@ -68,41 +64,33 @@ def update_cache():
                         lines.append(line)
                         count += 1
         except Exception as e:
-            logger.warning(f"Ошибка {url[:50]}: {e}")
+            logger.warning(f"Ошибка {url}: {e}")
 
-    with cache_lock:
-        playlist_cache = "\n".join(lines)
-        stats = {"total": count, "sources_ok": ok_sources}
-
-    logger.info(f"✅ Загружено {count} каналов из {ok_sources} источников")
+    playlist_cache = "\n".join(lines)
+    cache_time = time.time()
+    logger.info(f"✅ Загружено {count} каналов")
 
 
 def background_update():
     while True:
         update_cache()
-        time.sleep(1800)  # 30 минут
+        time.sleep(1800)
 
 
 threading.Thread(target=background_update, daemon=True).start()
-time.sleep(12)  # первая загрузка
+time.sleep(12)
 
 
 @app.route('/')
 def home():
-    with cache_lock:
-        s = stats.copy()
-    return f"""
-    <h1>🇷🇺 IPTV Russia Pro</h1>
-    <p>Каналов: <b>{s['total']}</b></p>
-    <p>Рабочих источников: <b>{s['sources_ok']}</b></p>
-    <p><a href="/playlist.m3u">Скачать M3U</a></p>
-    """
+    return "<h1>🇷🇺 IPTV Russia Pro</h1><p><a href='/playlist.m3u'>Скачать плейлист</a></p>"
 
 
 @app.route('/playlist.m3u')
 def playlist():
-    with cache_lock:
-        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
+    if time.time() - cache_time > 600:
+        threading.Thread(target=update_cache, daemon=True).start()
+    return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
 
 if __name__ == '__main__':
