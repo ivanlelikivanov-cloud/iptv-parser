@@ -1,8 +1,9 @@
-from flask import Flask, Response
-import requests
-import threading
+import os
+import re
 import time
 import logging
+import threading
+from flask import Flask, Response
 
 app = Flask(__name__)
 
@@ -22,7 +23,7 @@ SOURCES = [
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
-playlist_cache = "#EXTM3U\n# IPTV Russia - Loading...\n"
+playlist_cache = "#EXTM3U\n# Загрузка каналов...\n"
 cache_time = 0
 
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 def update_cache():
     global playlist_cache, cache_time
     logger.info("🔄 Загрузка каналов...")
-    all_lines = ["#EXTM3U", "# IPTV Russia Pro - 2000+ каналов"]
+    all_lines = ["#EXTM3U", "# IPTV Russia Pro"]
     seen = set()
 
     for url in SOURCES:
@@ -53,7 +54,7 @@ def update_cache():
                                 all_lines.append(url_stream)
                     i += 1
         except Exception as e:
-            logger.warning(f"Ошибка {url}: {e}")
+            logger.warning(f"Ошибка источника: {e}")
 
     playlist_cache = "\n".join(all_lines)
     cache_time = time.time()
@@ -63,12 +64,11 @@ def update_cache():
 def background_update():
     while True:
         update_cache()
-        time.sleep(1800)  # 30 минут
+        time.sleep(1800)
 
 
-# Первый запуск
 threading.Thread(target=background_update, daemon=True).start()
-time.sleep(8)  # Даём время на первую загрузку
+time.sleep(10)  # Даём время на первую загрузку
 
 
 @app.route('/')
@@ -76,13 +76,12 @@ def home():
     return """
     <h1>🇷🇺 IPTV Russia Pro</h1>
     <p><a href="/playlist.m3u" style="font-size:24px">📥 Скачать плейлист</a></p>
-    <p>Если каналов мало — нажми F5 через 15 секунд</p>
     """
 
 
 @app.route('/playlist.m3u')
 def playlist():
-    if time.time() - cache_time > 600:  # если старше 10 минут
+    if time.time() - cache_time > 600:
         threading.Thread(target=update_cache, daemon=True).start()
     return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
