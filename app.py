@@ -15,7 +15,7 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://m3u.su/m3u/sng.m3u",
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 def update_cache():
     global playlist_cache, cache_time
-    logger.info("🔄 Обновление плейлиста...")
-    lines = ["#EXTM3U", "# IPTV Russia Pro - Актуальные источники"]
+    logger.info("🔄 Загрузка...")
+    lines = ["#EXTM3U", "# IPTV Russia Pro"]
     seen = set()
 
     for url in SOURCES:
@@ -48,12 +48,12 @@ def update_cache():
                         seen.add(line)
                         lines.append(inf)
                         lines.append(line)
-        except Exception as e:
-            logger.warning(f"Мёртвый источник: {url}")
+        except:
+            pass
 
     playlist_cache = "\n".join(lines)
     cache_time = time.time()
-    logger.info(f"✅ Загружено {len(seen)} каналов")
+    logger.info(f"✅ {len(seen)} каналов")
 
 
 def background_update():
@@ -63,7 +63,7 @@ def background_update():
 
 
 threading.Thread(target=background_update, daemon=True).start()
-time.sleep(10)  # первая загрузка
+time.sleep(12)
 
 
 @app.route('/')
