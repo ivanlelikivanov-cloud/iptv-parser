@@ -9,7 +9,6 @@ app = Flask(__name__)
 
 # ==================== МАКСИМАЛЬНЫЕ ИСТОЧНИКИ ====================
 SOURCES = [
-    # IPTV-ORG (основные + регионы)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -20,55 +19,70 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
-
-    # GitHub + другие крупные сборки
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
-    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
-    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
     "https://m3u.su/m3u/sng.m3u",
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
     "https://m3u.su/m3u/ru_4k.m3u",
     "https://m3u.su/m3u/ru_sport.m3u",
     "https://m3u.su/m3u/ru_kino.m3u",
-    "https://m3u.su/m3u/ru_deti.m3u",
+    # Твои новые
+    "https://m3u.su/dit",
+    "https://m3u.su/kit",
+    "https://m3u.su/d5",
 ]
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro - Максимум каналов\n"
-cache_time = 0
+playlist_cache = "#EXTM3U\n# IPTV Russia Pro\n"
+cache_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def check_channel(url):
+    """Проверка работоспособности канала"""
+    try:
+        r = requests.head(url, timeout=4, headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True)
+        return r.status_code < 400
+    except:
+        return False
+
 def update_cache():
-    global playlist_cache, cache_time
-    logger.info("🔄 Загрузка плейлиста...")
-    lines = ["#EXTM3U", "# IPTV Russia Pro - Максимум"]
+    global playlist_cache
+    logger.info("🔄 Сборка плейлиста...")
+    lines = ["#EXTM3U", "# IPTV Russia Pro - С проверкой каналов"]
     seen = set()
     count = 0
+    alive_count = 0
 
     for url in SOURCES:
         try:
-            r = requests.get(url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
+            r = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
             if r.status_code == 200:
+                inf = ""
                 for line in r.text.splitlines():
                     line = line.strip()
                     if line.startswith('#EXTINF:'):
                         inf = line
                     elif line.startswith('http') and line not in seen:
                         seen.add(line)
-                        lines.append(inf)
-                        lines.append(line)
-                        count += 1
+                        if check_channel(line):
+                            lines.append(inf)
+                            lines.append(line)
+                            count += 1
+                            alive_count += 1
+                        else:
+                            # Добавляем даже мёртвые, но с пометкой
+                            lines.append(inf + " [DEAD]")
+                            lines.append(line)
+                            count += 1
         except Exception as e:
             logger.warning(f"Ошибка {url}: {e}")
 
-    playlist_cache = "\n".join(lines)
-    cache_time = time.time()
-    logger.info(f"✅ Загружено {count} каналов")
+    with cache_lock:
+        playlist_cache = "\n".join(lines)
+    logger.info(f"✅ Всего: {count} | Живых: {alive_count}")
 
 
 def background_update():
@@ -88,9 +102,8 @@ def home():
 
 @app.route('/playlist.m3u')
 def playlist():
-    if time.time() - cache_time > 600:
-        threading.Thread(target=update_cache, daemon=True).start()
-    return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
+    with cache_lock:
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
 
 if __name__ == '__main__':
