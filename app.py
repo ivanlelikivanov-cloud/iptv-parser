@@ -5,33 +5,34 @@ from flask import Flask, Response, jsonify
 
 app = Flask(__name__)
 
-# ==================== USER-AGENTS (вместо fake-useragent) ====================
+# ==================== USER-AGENTS ====================
 USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15',
 ]
 
 def get_ua():
     return random.choice(USER_AGENTS)
 
+# ==================== СТАТИЧЕСКИЕ ИСТОЧНИКИ (FALLBACK) ====================
+STATIC_SOURCES = [
+    "https://iptv-org.github.io/iptv/countries/ru.m3u",
+    "https://iptv-org.github.io/iptv/languages/rus.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-mos.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",
+    "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
+    "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
+    "https://m3u.su/m3u/sng.m3u",
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+]
+
 # ==================== НАСТРОЙКИ ====================
-SEARCH_QUERIES = [
-    "iptv russia m3u",
-    "русские каналы m3u8",
-    "iptv playlist ru site:github.com",
-]
-
-SEED_SITES = [
-    "https://github.com/iptv-org/iptv",
-    "https://sat-portal.com/plejlisty",
-    "https://homtv.ru/",
-    "https://6x6.msk.ru/",
-    "https://iptv-rus.com/",
-]
-
-MAX_DISCOVERED = 100
+SEARCH_QUERIES = ["iptv russia m3u", "русские каналы m3u8"]
+SEED_SITES = ["https://sat-portal.com/plejlisty", "https://homtv.ru/", "https://6x6.msk.ru/"]
+MAX_DISCOVERED = 50
 MAX_CHANNELS = 3000
 CHECK_TIMEOUT = 3
 MAX_WORKERS = 30
@@ -44,25 +45,27 @@ logger = logging.getLogger(__name__)
 
 # ==================== ФИЛЬТР РУССКИХ КАНАЛОВ ====================
 def is_russian_channel(name, attrs, url):
+    # Упрощённый фильтр
     lang = attrs.get('tvg-language', '').lower()
     if lang in ['rus', 'ru', 'russian']:
         return True
+    
+    # Кириллица в названии
     if re.search(r'[\u0400-\u04FF]', name):
-        exclude = ['.by/', '.ua/', '.kz/', '.am/', '.ge/', '.az/',
-                   'belarus', 'ukraine', 'kazakh', 'armenia', 'georgia']
-        if any(x in url.lower() or x in name.lower() for x in exclude):
+        # Не исключаем слишком агрессивно
+        exclude = ['.by/', '.ua/', '.kz/', 'belarus', 'ukraine', 'kazakh']
+        if any(x in url.lower() for x in exclude):
             return False
         return True
     return False
 
 def get_category(name):
     n = name.lower()
-    if any(k in n for k in ['новости', 'news', '24', 'vesti']): return 'Новости'
-    elif any(k in n for k in ['кино', 'movie', 'film', 'сериал']): return 'Кино'
-    elif any(k in n for k in ['музыка', 'music', 'хит', 'radio']): return 'Музыка'
-    elif any(k in n for k in ['спорт', 'sport', 'футбол']): return 'Спорт'
+    if any(k in n for k in ['новости', 'news', '24']): return 'Новости'
+    elif any(k in n for k in ['кино', 'movie', 'film']): return 'Кино'
+    elif any(k in n for k in ['музыка', 'music']): return 'Музыка'
+    elif any(k in n for k in ['спорт', 'sport']): return 'Спорт'
     elif any(k in n for k in ['дет', 'kids', 'мульт']): return 'Детские'
-    elif any(k in n for k in ['докум', 'doc']): return 'Документальные'
     else: return 'Общие'
 
 # ==================== ОБНАРУЖЕНИЕ ПЛЕЙЛИСТОВ ====================
@@ -70,43 +73,38 @@ def discover_playlists():
     found = set()
     headers = {'User-Agent': get_ua()}
     
-    # 1. Поиск по запросам
-    for i, query in enumerate(SEARCH_QUERIES[:3]):
+    # Поиск
+    for query in SEARCH_QUERIES:
         try:
             search_url = f"https://lite.duckduckgo.com/lite?q={quote(query)}"
             r = requests.get(search_url, headers=headers, timeout=12)
             if r.ok:
                 links = re.findall(r'href="(https?://[^"]+?\.m3u8?)"', r.text, re.I)
-                for link in links:
-                    if is_ru_source(link):
-                        found.add(link)
-            time.sleep(REQUEST_DELAY * 3)
+                found.update(links)
+                logger.info(f"🔍 Поиск '{query}': +{len(links)} ссылок")
+            time.sleep(REQUEST_DELAY * 2)
         except Exception as e:
-            logger.debug(f"❌ Поиск '{query}': {e}")
+            logger.debug(f"❌ Поиск: {e}")
     
-    # 2. Сканирование сайтов
+    # Сканирование сайтов
     for seed in SEED_SITES:
         try:
-            headers = {'User-Agent': get_ua()}
             r = requests.get(seed, headers=headers, timeout=12)
             if r.ok:
                 links = re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', r.text, re.I)
-                for link in links:
-                    if is_ru_source(link):
-                        found.add(link)
+                found.update(links)
+                logger.info(f"🔍 {seed[:30]}: +{len(links)} ссылок")
             time.sleep(REQUEST_DELAY)
         except Exception as e:
-            logger.debug(f"❌ {seed[:40]}: {e}")
+            logger.debug(f"❌ {seed[:30]}: {e}")
     
-    result = list(found)[:MAX_DISCOVERED]
-    logger.info(f"🎯 Найдено {len(result)} плейлистов")
+    # Добавляем статические источники
+    found.update(STATIC_SOURCES)
+    
+    result = list(found)[:MAX_DISCOVERED + len(STATIC_SOURCES)]
+    logger.info(f"🎯 Всего источников: {len(result)} (найдено: {len(found) - len(STATIC_SOURCES)}, статика: {len(STATIC_SOURCES)})")
     return result
 
-def is_ru_source(url):
-    url_lower = url.lower()
-    return any(x in url_lower for x in ['ru', 'russia', 'moscow', 'spb', 'sib', 'ural']) and '.m3u' in url_lower
-
-# ==================== ПРОВЕРКА КАНАЛОВ ====================
 def check_channel(channel):
     url = channel.get('url')
     if not url:
@@ -118,6 +116,9 @@ def check_channel(channel):
         return False
 
 def validate_channels(channels, sample_size=500):
+    if not channels:
+        return [], 0
+    
     sample = channels[:sample_size] if len(channels) > sample_size else channels
     alive = []
     
@@ -144,15 +145,18 @@ def update_cache():
     global playlist_cache, stats, discovered_sources
     logger.info("🔄 Обновление плейлиста...")
     
+    # Обновляем источники раз в UPDATE_INTERVAL
     if not discovered_sources or time.time() - getattr(app, '_last_discovery', 0) > UPDATE_INTERVAL:
         discovered_sources = discover_playlists()
         app._last_discovery = time.time()
     
-    lines = ["#EXTM3U", f"# 🇷🇺 IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}"]
+    lines = ["#EXTM3U", f"# 🇷 IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}"]
     seen_urls = set()
     seen_keys = set()
     all_channels = []
     ok_sources = 0
+    total_from_static = 0
+    total_from_dynamic = 0
     
     for url in discovered_sources:
         try:
@@ -160,7 +164,14 @@ def update_cache():
             r = requests.get(url, headers=headers, timeout=10)
             if r.ok and '#EXTM3U' in r.text[:100]:
                 ok_sources += 1
+                is_static = url in STATIC_SOURCES
+                if is_static:
+                    total_from_static += 1
+                else:
+                    total_from_dynamic += 1
+                    
                 current_inf, current_attrs = None, {}
+                channels_from_this = 0
                 
                 for line in r.text.splitlines():
                     line = line.strip()
@@ -188,16 +199,25 @@ def update_cache():
                             })
                             lines.append(current_inf)
                             lines.append(ch_url)
+                            channels_from_this += 1
                             if len(seen_urls) >= MAX_CHANNELS:
                                 break
                         current_inf = None
+                
+                logger.debug(f"  ✅ {url[:50]}: +{channels_from_this} каналов")
+                
         except Exception as e:
-            logger.debug(f"❌ {url[:40]}: {e}")
+            logger.debug(f"  ❌ {url[:50]}: {e}")
+        
         if len(seen_urls) >= MAX_CHANNELS:
             break
     
+    logger.info(f"📊 Загружено {len(all_channels)} каналов из {ok_sources} источников (статика: {total_from_static}, динамика: {total_from_dynamic})")
+    
+    # Валидация
     alive_channels, alive_count = validate_channels(all_channels, sample_size=400)
     
+    # Сортировка
     all_channels.sort(key=lambda x: (
         1 if x.get('alive') else 0,
         1 if x.get('attrs', {}).get('tvg-logo') else 0,
@@ -214,7 +234,7 @@ def update_cache():
             "updated": time.strftime('%H:%M')
         }
     
-    logger.info(f"✨ Готово: {stats['total']} каналов, {stats['alive']} живых, {ok_sources} источников")
+    logger.info(f"✨ Готово: {stats['total']} каналов, {stats['alive']} живых")
 
 
 def background_update():
@@ -225,6 +245,7 @@ def background_update():
             logger.error(f"❌ Ошибка: {e}")
         time.sleep(UPDATE_INTERVAL)
 
+# Запуск в фоне
 threading.Thread(target=background_update, daemon=True).start()
 
 
@@ -239,15 +260,15 @@ h1{{color:#58a6ff}}.stat{{font-size:2rem;font-weight:bold;margin:8px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;max-width:650px;margin:20px auto}}
 .card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px}}
 a{{color:#58a6ff}}small{{color:#6e7681}}</style></head><body>
-<h1>🇷🇺 IPTV Russia Pro</h1>
+<h1>🇷 IPTV Russia Pro</h1>
 <div class="grid">
 <div class="card"><div class="stat" style="color:#2ea043">{s['total']}</div><div>Каналов</div></div>
 <div class="card"><div class="stat" style="color:#2ea043">{s['alive']}</div><div>Живых</div></div>
 <div class="card"><div class="stat" style="color:#58a6ff">{s['sources']}</div><div>Источников</div></div>
-<div class="card"><div class="stat" style="color:#f093fb">{s['discovered']}</div><div>Найдено</div></div>
+<div class="card"><div class="stat" style="color:#f093fb">{s['discovered']}</div><div>Всего</div></div>
 </div>
-<p><a href="/playlist.m3u" style="font-size:1.1rem">📥 Скачать плейлист M3U</a></p>
-<small>🔄 Авто: 60 мин | ✅ Валидация: {MAX_WORKERS} потоков | 🇷🇺 Только RU</small>
+<p><a href="/playlist.m3u" style="font-size:1.1rem">📥 Скачать M3U</a></p>
+<small>🔄 60 мин | ✅ {MAX_WORKERS} потоков | 🇷🇺 RU каналы</small>
 </body></html>"""
 
 
