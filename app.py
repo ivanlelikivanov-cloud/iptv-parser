@@ -9,7 +9,7 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== МНОГО РЕСУРСОВ ДЛЯ ПОИСКА ====================
+# ==================== МНОГО РЕСУРСОВ ====================
 HTML_SOURCES = [
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
     "https://6x6.msk.ru/",
