@@ -97,6 +97,23 @@ def fetch_dynamic_sources():
             pass
     return list(dynamic)
 
+def get_category(name):
+    n = name.lower()
+    if any(k in n for k in ['новости', 'news', '24', 'vesti', 'информ', 'россия 24']):
+        return 'Новости'
+    elif any(k in n for k in ['кино', 'movie', 'film', 'сериал', 'tv 1000', 'ciné']):
+        return 'Кино'
+    elif any(k in n for k in ['музыка', 'music', 'хит', 'radio', 'mtv', 'bridge']):
+        return 'Музыка'
+    elif any(k in n for k in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'боец']):
+        return 'Спорт'
+    elif any(k in n for k in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney']):
+        return 'Детские'
+    elif any(k in n for k in ['докум', 'doc', 'познав', 'history', 'nat geo', 'discovery']):
+        return 'Познавательные'
+    else:
+        return 'Общие'
+
 def check_channel(url):
     try:
         r = requests.head(url, timeout=3, headers=HEADERS, allow_redirects=True)
