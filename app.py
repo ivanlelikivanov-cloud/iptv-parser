@@ -9,7 +9,7 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== МНОГО HTML-РЕСУРСОВ ДЛЯ ПОИСКА ====================
+# ==================== МНОГО РЕСУРСОВ ДЛЯ ПОИСКА ====================
 HTML_SOURCES = [
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
     "https://6x6.msk.ru/",
@@ -58,6 +58,11 @@ HTML_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-mos.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
 ]
 
 STATIC_SOURCES = [
@@ -115,7 +120,6 @@ def get_category(name):
         return 'Общие'
 
 def is_adult(name):
-    """Фильтр 18+"""
     n = name.lower()
     adult_words = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'sexo', 'nude', 'erotic']
     return any(word in n for word in adult_words)
