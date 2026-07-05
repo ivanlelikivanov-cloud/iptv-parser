@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import logging
 import threading
@@ -7,6 +8,7 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
+# ==================== ИСТОЧНИКИ ====================
 SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
@@ -15,6 +17,7 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
@@ -25,15 +28,31 @@ SOURCES = [
     "https://m3u.su/d5",
 ]
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro - Загрузка...\n"
-cache_time = 0
+playlist_cache = "#EXTM3U\n# IPTV Russia Pro\n"
+cache_lock = threading.Lock()
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
+def get_category(name):
+    n = name.lower()
+    if any(k in n for k in ['новости', 'news', '24', 'vesti', 'информ']):
+        return 'Новости'
+    elif any(k in n for k in ['кино', 'movie', 'film', 'сериал']):
+        return 'Кино'
+    elif any(k in n for k in ['музыка', 'music', 'хит', 'radio']):
+        return 'Музыка'
+    elif any(k in n for k in ['спорт', 'sport', 'футбол']):
+        return 'Спорт'
+    elif any(k in n for k in ['дет', 'kids', 'мульт']):
+        return 'Детские'
+    elif any(k in n for k in ['докум', 'doc', 'познав']):
+        return 'Документальные'
+    return 'Общие'
+
 def update_cache():
-    global playlist_cache, cache_time
-    logger.info("🔄 Загрузка...")
+    global playlist_cache
+    logger.info("🔄 Обновление плейлиста...")
     lines = ["#EXTM3U", "# IPTV Russia Pro"]
     seen = set()
     count = 0
@@ -55,19 +74,21 @@ def update_cache():
         except Exception as e:
             logger.warning(f"Ошибка {url}: {e}")
 
-    playlist_cache = "\n".join(lines)
-    cache_time = time.time()
+    with cache_lock:
+        playlist_cache = "\n".join(lines)
     logger.info(f"✅ Загружено {count} каналов")
 
 
 def background_update():
     while True:
-        update_cache()
+        try:
+            update_cache()
+        except Exception as e:
+            logger.error(f"Ошибка обновления: {e}")
         time.sleep(1800)
 
 
 threading.Thread(target=background_update, daemon=True).start()
-time.sleep(12)  # первая загрузка
 
 
 @app.route('/')
@@ -77,9 +98,8 @@ def home():
 
 @app.route('/playlist.m3u')
 def playlist():
-    if time.time() - cache_time > 600:
-        threading.Thread(target=update_cache, daemon=True).start()
-    return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
+    with cache_lock:
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
 
 if __name__ == '__main__':
