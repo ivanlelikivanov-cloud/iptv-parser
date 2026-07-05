@@ -9,59 +9,31 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== САЙТЫ ДЛЯ ПОИСКА (30+) ====================
-HTML_SOURCES = [
-    # Основные агрегаторы
-    "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
-    "https://6x6.msk.ru/",
-    "https://homtv.ru/",
-    "https://iptv-rus.com/",
-    "https://pikniktv.info/viewtopic.php?t=6737",
-    "https://iptv-org.github.io/iptv/countries/ru.m3u",
-    "https://iptv-org.github.io/iptv/languages/rus.m3u",
-
-    # Форумы и обсуждения
-    "https://forum.ixbt.com/topic.php?id=123456",
-    "https://forum.ru-board.com/topic.cgi?forum=5&topic=12345",
-    "https://www.drive2.ru/b/728133159748642624/",
-    "https://4pda.to/forum/index.php?showtopic=123456",
-    "https://www.linux.org.ru/forum/general/123456",
-    "https://habr.com/ru/search/?q=iptv+m3u",
-
-    # GitHub репозитории
-    "https://github.com/iptv-org/iptv",
-    "https://github.com/Free-iptv/iptv",
-    "https://github.com/4mirror/iptv",
-    "https://github.com/DenMSU/tv",
-    "https://github.com/sknk/iptv",
-    "https://github.com/alexeyvaneev/iptv",
-    "https://github.com/playlist-for-free/IPTV",
-
-    # Другие источники
-    "https://m3u.su/",
-    "https://webarmen.com/my/iptv/",
-    "https://iptv.best/",
-    "https://iptv-channels.net/",
-    "https://iptv-live.ru/",
-    "https://iptv-tv.ru/",
-    "https://iptv-russia.online/",
-    "https://free-iptv.xyz/",
-    "https://iptvsource.com/",
-    "https://iptv-db.com/",
-]
-
+# ==================== ИСТОЧНИКИ ====================
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-mos.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
-    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://m3u.su/m3u/sng.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
     "https://m3u.su/dit",
     "https://m3u.su/kit",
     "https://m3u.su/d5",
+]
+
+HTML_SOURCES = [
+    "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
+    "https://6x6.msk.ru/",
+    "https://homtv.ru/",
+    "https://iptv-rus.com/",
+    "https://pikniktv.info/viewtopic.php?t=6737",
 ]
 
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro - Авто-поиск...\n"
@@ -70,13 +42,15 @@ is_updating = False
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+HEADERS_BROWSER = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.16 LibVLC/3.0.16'}
 
 def fetch_dynamic_sources():
     dynamic = set()
     for page in HTML_SOURCES:
         try:
-            r = requests.get(page, headers=HEADERS, timeout=15)
+            r = requests.get(page, headers=HEADERS_BROWSER, timeout=15)
             if r.status_code == 200:
                 links = re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', r.text)
                 for link in links:
@@ -86,8 +60,9 @@ def fetch_dynamic_sources():
     return list(dynamic)
 
 def check_channel(url):
+    """Проверка канала с User-Agent плеера"""
     try:
-        r = requests.head(url, timeout=3, headers=HEADERS, allow_redirects=True)
+        r = requests.head(url, timeout=3, headers=HEADERS_PLAYER, allow_redirects=True)
         return r.status_code < 400
     except:
         return False
@@ -97,28 +72,35 @@ def update_cache():
     if is_updating:
         return
     is_updating = True
-    logger.info("🔄 Авто-поиск...")
+    logger.info("🔄 Авто-поиск русских каналов...")
 
+    # 1. Сбор источников
     dynamic = fetch_dynamic_sources()
     all_sources = list(set(STATIC_SOURCES + dynamic))
 
+    # 2. Скачивание (ограничение)
     raw_channels = []
     seen = set()
-    for url in all_sources:
+    for url in all_sources[:30]:  # Лимит источников
         try:
-            r = requests.get(url, timeout=12, headers=HEADERS)
+            r = requests.get(url, timeout=12, headers=HEADERS_BROWSER)
             if r.status_code == 200:
                 inf = ""
+                name = ""
                 for line in r.text.splitlines():
                     line = line.strip()
                     if line.startswith('#EXTINF:'):
                         inf = line
+                        match = re.search(r',(.+)$', line)
+                        name = match.group(1).strip() if match else ""
                     elif line.startswith('http') and line not in seen:
-                        seen.add(line)
-                        raw_channels.append({'inf': inf, 'url': line})
+                        if re.search(r'[\u0400-\u04FF]', name):  # Только русские
+                            seen.add(line)
+                            raw_channels.append({'inf': inf, 'url': line})
         except:
             pass
 
+    # 3. Многопоточная проверка
     valid = []
     with ThreadPoolExecutor(max_workers=40) as executor:
         future_to_ch = {executor.submit(check_channel, ch['url']): ch for ch in raw_channels}
@@ -127,6 +109,7 @@ def update_cache():
             if future.result():
                 valid.append(ch)
 
+    # 4. Плейлист
     lines = ["#EXTM3U", f"# IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}"]
     lines.append(f"# Русских каналов: {len(valid)}")
     for ch in valid:
@@ -136,15 +119,17 @@ def update_cache():
     with cache_lock:
         playlist_cache = "\n".join(lines)
     is_updating = False
-    logger.info(f"✅ {len(valid)} каналов")
+    logger.info(f"✅ {len(valid)} русских каналов")
 
 def background_update():
     while True:
-        update_cache()
+        try:
+            update_cache()
+        except Exception as e:
+            logger.error(f"Ошибка обновления: {e}")
         time.sleep(1800)
 
 threading.Thread(target=background_update, daemon=True).start()
-time.sleep(12)
 
 @app.route('/')
 def home():
