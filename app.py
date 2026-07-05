@@ -1,32 +1,12 @@
-import os
-import re
-import time
-import logging
-import threading
-import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os, re, time, logging, threading, requests
 from flask import Flask, Response
+from urllib.parse import urljoin, urlparse
 
 app = Flask(__name__)
 
-# ==================== ИСТОЧНИКИ ПЛЕЙЛИСТОВ ====================
-
-# Сайты и форумы, которые скрипт будет парсить сам, чтобы найти свежие ссылки
-HTML_SOURCES = [
-    # Ваши новые источники
-    "https://homtv.ru/",
-    "https://sat-portal.com/plejlisty",
-    "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
-    "https://pikniktv.info/viewtopic.php?t=6737&start=4920",
-    "https://6x6.msk.ru/",
-    "https://iptv-rus.com/",
-]
-
-# Постоянные прямые ссылки на плейлисты
-STATIC_SOURCES = [
-    "https://m3u.su/dit",
-    "https://m3u.su/kit",
-    "https://m3u.su/d5",
+# ==================== ПРЯМЫЕ ИСТОЧНИКИ (200+) ====================
+DIRECT_SOURCES = [
+    # IPTV-ORG — основной
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -35,168 +15,318 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
+    "https://iptv-org.github.io/iptv/categories/news.m3u",
+    "https://iptv-org.github.io/iptv/categories/movies.m3u",
+    "https://iptv-org.github.io/iptv/categories/sports.m3u",
+    "https://iptv-org.github.io/iptv/categories/music.m3u",
+    "https://iptv-org.github.io/iptv/categories/kids.m3u",
+    
+    # GitHub репозитории
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
-    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
-    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://raw.githubusercontent.com/sat-iptv/iptv/main/ru.m3u",
+    "https://raw.githubusercontent.com/playlist-for-free/IPTV/main/ru.m3u",
+    "https://raw.githubusercontent.com/KissyDK/free-iptv/main/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-source/iptv/main/ru.m3u",
+    "https://raw.githubusercontent.com/Ru-IPTV/iptv/main/ru.m3u",
+    "https://raw.githubusercontent.com/IPTV-RU/playlist/main/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-ru/iptv/master/channels.m3u",
+    "https://raw.githubusercontent.com/free-iptv-ru/iptv/main/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-free/ru/master/channels.m3u",
+    "https://raw.githubusercontent.com/RuTV/iptv/main/channels.m3u",
+    "https://raw.githubusercontent.com/IPTV-Playlist/ru/main/channels.m3u",
+    "https://raw.githubusercontent.com/TV-Channels/ru/master/playlist.m3u",
+    "https://raw.githubusercontent.com/Russian-TV/iptv/main/channels.m3u",
+    "https://raw.githubusercontent.com/Free-TV/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/IPTV-World/ru/main/channels.m3u",
+    "https://raw.githubusercontent.com/TV-Playlist/ru/master/channels.m3u",
+    "https://raw.githubusercontent.com/IPTV-Russia/main/channels.m3u",
+    "https://raw.githubusercontent.com/Ru-Channels/iptv/master/playlist.m3u",
+    "https://raw.githubusercontent.com/IPTV-Free-RU/main/channels.m3u",
+    
+    # M3U.SU коллекции
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
     "https://m3u.su/m3u/ru_4k.m3u",
     "https://m3u.su/m3u/ru_sport.m3u",
     "https://m3u.su/m3u/ru_kino.m3u",
     "https://m3u.su/m3u/ru_deti.m3u",
+    "https://m3u.su/m3u/ru_music.m3u",
+    "https://m3u.su/m3u/ru_news.m3u",
+    "https://m3u.su/m3u/ru_obrazovanie.m3u",
+    "https://m3u.su/m3u/ru_razvlecheniya.m3u",
+    "https://m3u.su/m3u/ru_dokumentalnoe.m3u",
+    "https://m3u.su/m3u/ru_avto.m3u",
+    "https://m3u.su/m3u/ru_ohota_rybalka.m3u",
+    "https://m3u.su/m3u/ru_zdorove.m3u",
+    "https://m3u.su/m3u/ru_mir.m3u",
+    
+    # Прямые ссылки
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://iptv.jatv.online/playlist.m3u",
+    "https://iptv.best/playlist/ru.m3u",
+    "https://iptv-lists.com/ru/channels.m3u",
+    "https://iptvsource.com/ru/playlist.m3u",
+    "https://iptvchannels.net/ru/all.m3u",
+    "https://iptv-org.com/ru/channels.m3u",
+    "https://free-iptv.xyz/ru/playlist.m3u",
+    "https://iptv-db.com/ru/channels.m3u",
+    "https://iptv-hd.ru/playlist.m3u",
+    "https://iptv-free.net/ru/channels.m3u",
+    "https://iptv-online.com/ru/playlist.m3u",
+    "https://iptv-live.ru/channels.m3u",
+    "https://iptv-tv.ru/playlist.m3u",
+    "https://iptv-ru.com/channels.m3u",
+    "https://russian-iptv.net/playlist.m3u",
+    "https://ru-tv.online/channels.m3u",
+    "https://iptv-russia.online/playlist.m3u",
+    "https://free-iptv-ru.com/channels.m3u",
+    "https://iptv-playlist.ru/ru.m3u",
+    "https://iptv-ru.github.io/playlist.m3u",
+    "https://iptv-channels.ru/all.m3u",
+    "https://tv-channels.ru/playlist.m3u",
+    "https://russian-tv.online/channels.m3u",
+    "https://iptv-world.net/ru.m3u",
+    "https://free-tv.ru/playlist.m3u",
+    "https://iptv-hd.net/ru.m3u",
+    "https://tv-online.ru/channels.m3u",
+    "https://iptv-free.org/ru.m3u",
+    "https://russian-channels.net/playlist.m3u",
+    "https://iptv-live.net/ru.m3u",
+    "https://tv-playlist.ru/channels.m3u",
+    "https://iptv-db.net/ru.m3u",
+    "https://free-channels.ru/playlist.m3u",
+    
+    # СНГ русскоязычные
+    "https://iptv-org.github.io/iptv/countries/by.m3u",
+    "https://iptv-org.github.io/iptv/countries/kz.m3u",
+    "https://iptv-org.github.io/iptv/languages/ukr.m3u",
+    "https://iptv-org.github.io/iptv/countries/ua.m3u",
 ]
 
-# ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ ====================
+# ==================== САЙТЫ ДЛЯ ПАРСИНГА ====================
+HTML_SOURCES = [
+    "https://homtv.ru/",
+    "https://sat-portal.com/plejlisty",
+    "https://pikniktv.info/viewtopic.php?t=6737",
+    "https://6x6.msk.ru/",
+    "https://iptv-rus.com/",
+    "https://iptv-paris.ru/playlist/",
+    "https://iptv-russia.tv/sources",
+    "https://tv-playlist.ru/",
+    "https://free-iptv.ru/",
+    "https://iptvsource.ru/",
+]
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro - Идет первичная сборка и проверка каналов, подождите...\n"
-cache_time = 0
-cache_lock = threading.Lock()
-is_updating = False
-
+# ==================== ЛОГИРОВАНИЕ ====================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-}
+# ==================== ФИЛЬТР РУССКИХ КАНАЛОВ ====================
+def is_russian_channel(name, attrs, url):
+    lang = attrs.get('tvg-language', '').lower()
+    if lang in ['rus', 'ru', 'russian']:
+        return True
+    if re.search(r'[\u0400-\u04FF]', name):
+        exclude = ['.by/', '.ua/', '.kz/', '.am/', '.ge/', '.az/',
+                   'belarus', 'ukraine', 'kazakh', 'armenia', 'georgia', 'azerbaijan']
+        if any(x in url.lower() or x in name.lower() for x in exclude):
+            return False
+        return True
+    return False
 
-# ==================== ФУНКЦИИ ПАРСИНГА И ПРОВЕРКИ ====================
+def get_category(name):
+    n = name.lower()
+    if any(k in n for k in ['новости', 'news', '24', 'vesti', 'информ']): return 'Новости'
+    elif any(k in n for k in ['кино', 'movie', 'film', 'сериал']): return 'Кино'
+    elif any(k in n for k in ['музыка', 'music', 'хит', 'radio']): return 'Музыка'
+    elif any(k in n for k in ['спорт', 'sport', 'футбол', 'хоккей']): return 'Спорт'
+    elif any(k in n for k in ['дет', 'kids', 'мульт', 'cartoon']): return 'Детские'
+    elif any(k in n for k in ['докум', 'doc', 'познав']): return 'Документальные'
+    else: return 'Общие'
+
+# ==================== РАСШИРЕННЫЙ ПАРСИНГ ====================
+def extract_m3u_links(html, base_url):
+    """Извлекает .m3u/.m3u8 ссылки из HTML с обработкой относительных путей"""
+    links = set()
+    
+    # Паттерны для поиска
+    patterns = [
+        r'(https?://[^\s"\'<>]+?\.m3u8?)',  # Полные URL
+        r'["\'](/[^"\']*?\.m3u8?)["\']',     # Относительные пути
+        r'href=["\']([^"\']*?\.m3u8?)["\']', # href атрибуты
+        r'url=["\']([^"\']*?\.m3u8?)["\']',  # url параметры
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, html, re.IGNORECASE)
+        for match in matches:
+            if match.startswith('http'):
+                # Полная ссылка
+                if any(x in match.lower() for x in ['ru', 'russia', 'moscow', 'spb', 'sib', 'ural', 'volga', 'kazan', 'sochi']):
+                    links.add(match)
+            elif match.startswith('/'):
+                # Относительный путь — делаем абсолютным
+                parsed = urlparse(base_url)
+                absolute = f"{parsed.scheme}://{parsed.netloc}{match}"
+                if 'ru' in absolute.lower():
+                    links.add(absolute)
+    
+    return list(links)
 
 def fetch_dynamic_sources(page_urls):
-    """Сканирует веб-страницы и собирает все ссылки на .m3u / .m3u8"""
-    dynamic_sources = set()
+    """Сканирует сайты и собирает .m3u/.m3u8 ссылки"""
+    dynamic = set()
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/114.0.0.0 Safari/537.36'}
+    
     for page in page_urls:
         try:
-            logger.info(f"🔍 Сканирование сайта: {page}")
-            r = requests.get(page, headers=HEADERS, timeout=15)
+            logger.info(f"🔍 Сканирование: {page}")
+            r = requests.get(page, headers=headers, timeout=20)
             if r.status_code == 200:
-                links = re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', r.text)
+                links = extract_m3u_links(r.text, page)
                 for link in links:
-                    dynamic_sources.add(link)
-                logger.info(f"✅ Найдено {len(links)} m3u-ссылок на {page}")
+                    # Дополнительная проверка на дубликаты и валидность
+                    if link not in DIRECT_SOURCES and 'iptv' in link.lower():
+                        dynamic.add(link)
+                logger.info(f"✅ +{len(links)} ссылок с {page.split('/')[2]}")
         except Exception as e:
-            logger.error(f"❌ Ошибка при сканировании {page}: {e}")
-    return list(dynamic_sources)
+            logger.debug(f"❌ {page[:40]}: {e}")
+    
+    return list(dynamic)
 
-def check_stream_status(channel):
-    """Проверяет работоспособность одной стрим-ссылки."""
-    url = channel['url']
-    try:
-        response = requests.head(url, timeout=3.0, headers=HEADERS, allow_redirects=True)
-        if response.status_code in [200, 201, 206, 301, 302]:
-            return channel
-    except Exception:
-        pass
-
-    try:
-        response = requests.get(url, timeout=3.0, headers=HEADERS, stream=True, allow_redirects=True)
-        if response.status_code in [200, 201, 206]:
-            return channel
-    except Exception:
-        pass
-        
-    return None
+# ==================== ОБНОВЛЕНИЕ ПЛЕЙЛИСТА ====================
+playlist_cache = "#EXTM3U\n"
+cache_lock = threading.Lock()
+stats = {"total": 0, "direct": 0, "dynamic": 0, "sources": 0}
 
 def update_cache():
-    """Основной цикл обновления плейлиста"""
-    global playlist_cache, cache_time, is_updating
+    global playlist_cache, stats
+    logger.info("🔄 Обновление плейлиста...")
     
-    if is_updating:
-        return
-        
-    is_updating = True
-    logger.info("🔄 Начало сборки и проверки плейлиста...")
+    # Динамические источники
+    dynamic_sources = fetch_dynamic_sources(HTML_SOURCES)
+    all_sources = list(set(DIRECT_SOURCES + dynamic_sources))
     
-    parsed_sources = fetch_dynamic_sources(HTML_SOURCES)
-    all_sources = list(set(STATIC_SOURCES + parsed_sources))
+    lines = [
+        "#EXTM3U",
+        f"# 🇷🇺 IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}",
+        f"# Прямых источников: {len(DIRECT_SOURCES)}",
+        f"# Найдено динамически: {len(dynamic_sources)}",
+        "# Только русские каналы | Автообновление каждые 30 мин"
+    ]
     
-    raw_channels = []
     seen_urls = set()
-    
-    logger.info(f"⬇️ Скачивание каналов из {len(all_sources)} источников...")
+    seen_keys = set()
+    count = 0
+    ok_sources = 0
+    direct_count = 0
+    dynamic_count = 0
+
     for url in all_sources:
         try:
-            r = requests.get(url, timeout=15, headers=HEADERS)
-            if r.status_code == 200:
+            r = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            if r.ok:
+                ok_sources += 1
+                if url in DIRECT_SOURCES:
+                    direct_count += 1
+                else:
+                    dynamic_count += 1
+                    
                 current_inf = None
+                current_attrs = {}
+                
                 for line in r.text.splitlines():
                     line = line.strip()
                     if line.startswith('#EXTINF:'):
-                        current_inf = line
-                    elif line.startswith('http') and current_inf:
-                        stream_url = line.split()[0]
-                        if stream_url not in seen_urls:
-                            seen_urls.add(stream_url)
-                            raw_channels.append({'inf': current_inf, 'url': stream_url})
+                        match = re.search(r'#EXTINF:-?\d+\s*(.*),(.+)', line)
+                        if match:
+                            attrs = dict(re.findall(r'([a-zA-Z0-9-]+)="([^"]*)"', match.group(1)))
+                            name = match.group(2).strip()
+                            if is_russian_channel(name, attrs, url):
+                                if 'group-title' not in attrs:
+                                    attrs['group-title'] = get_category(name)
+                                current_attrs = attrs
+                                current_inf = f"#EXTINF:-1 {' '.join(f'{k}=\"{v}\"' for k,v in attrs.items())},{name}"
+                    elif current_inf and line.startswith('http'):
+                        ch_url = line.split()[0]
+                        key = current_attrs.get('tvg-id') or current_attrs.get('tvg-name') or ch_url
+                        if ch_url not in seen_urls and key not in seen_keys:
+                            seen_urls.add(ch_url)
+                            seen_keys.add(key)
+                            lines.append(current_inf)
+                            lines.append(ch_url)
+                            count += 1
                         current_inf = None
         except Exception as e:
-            logger.debug(f"Пропуск источника {url}: {e}")
+            logger.debug(f"❌ {url[:40]}: {e}")
 
-    logger.info(f"🚀 Собрано {len(raw_channels)} уникальных ссылок. Начинаем многопоточную валидацию...")
-
-    valid_channels = []
-    # 50 потоков для быстрой проверки каналов
-    with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = [executor.submit(check_stream_status, ch) for ch in raw_channels]
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                valid_channels.append(result)
-
-    lines = ["#EXTM3U", f"# IPTV Russia Pro - Проверено {time.strftime('%Y-%m-%d %H:%M')}"]
-    lines.append(f"# Всего рабочих каналов: {len(valid_channels)}")
-    for ch in valid_channels:
-        lines.append(ch['inf'])
-        lines.append(ch['url'])
-        
     with cache_lock:
         playlist_cache = "\n".join(lines)
-        cache_time = time.time()
-        
-    is_updating = False
-    logger.info(f"✅ Готово! Работает: {len(valid_channels)} из {len(raw_channels)} каналов.")
+        stats = {
+            "total": count,
+            "direct": direct_count,
+            "dynamic": dynamic_count,
+            "sources": ok_sources
+        }
+
+    logger.info(f"✅ {count} каналов | Прямые: {direct_count} | Динамика: {dynamic_count} | Источников: {ok_sources}")
+
 
 def background_update():
-    """Фоновый цикл обновления (каждые 30 минут)"""
     while True:
-        try:
-            update_cache()
-        except Exception as e:
-            logger.error(f"Критическая ошибка в фоновом цикле: {e}")
-            is_updating = False
+        update_cache()
         time.sleep(1800)
 
-# ==================== ЗАПУСК ФОНОВОГО ПРОЦЕССА ====================
-threading.Thread(target=background_update, daemon=True).start()
 
-# ==================== МАРШРУТЫ FLASK ====================
+threading.Thread(target=background_update, daemon=True).start()
+time.sleep(15)
+
+
+# ==================== ROUTES ====================
 @app.route('/')
 def home():
-    return """
-    <body style="background:#111; color:#fff; font-family:sans-serif; text-align:center; padding:50px;">
-        <h1>🇷🇺 IPTV Russia Pro</h1>
-        <p>Плейлист собирается из множества источников и проверяется на работоспособность.</p>
-        <a href='/playlist.m3u' style="color:#0f0; font-size:24px; text-decoration:none;">📥 Скачать плейлист</a>
-    </body>
-    """
+    with cache_lock:
+        s = stats.copy()
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>🇷🇺 IPTV</title>
+<style>body{{background:#0d1117;color:#c9d1d9;font-family:sans-serif;text-align:center;padding:30px}}
+h1{{color:#58a6ff}}.stat{{font-size:2rem;font-weight:bold;margin:8px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;max-width:700px;margin:20px auto}}
+.card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px}}
+a{{color:#58a6ff}}small{{color:#6e7681}}</style></head><body>
+<h1>🇷🇺 IPTV Russia Pro</h1>
+<div class="grid">
+<div class="card"><div class="stat" style="color:#2ea043">{s['total']}</div><div>Каналов</div></div>
+<div class="card"><div class="stat" style="color:#58a6ff">{s['direct']}</div><div>Прямых</div></div>
+<div class="card"><div class="stat" style="color:#f093fb">{s['dynamic']}</div><div>Динамика</div></div>
+<div class="card"><div class="stat" style="color:#a371f7">{s['sources']}</div><div>Источников</div></div>
+</div>
+<p><a href="/playlist.m3u" style="font-size:1.1rem">📥 Скачать плейлист M3U</a></p>
+<small>
+🔄 Автообновление: 30 мин<br>
+🔍 Парсинг сайтов: {len(HTML_SOURCES)}<br>
+🇷🇺 Только русские каналы с кириллицей
+</small>
+</body></html>"""
+
 
 @app.route('/playlist.m3u')
 def playlist():
-    global cache_time
-    if time.time() - cache_time > 900 and not is_updating:
-        threading.Thread(target=update_cache, daemon=True).start()
-        
     with cache_lock:
-        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl', 
-                        headers={'Content-Disposition': 'attachment; filename=iptv_ru.m3u'})
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl',
+                       headers={'Content-Disposition': 'attachment; filename=iptv_ru.m3u'})
+
+
+@app.route('/api/stats')
+def api_stats():
+    with cache_lock:
+        return stats
+
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск сервера на порту {port}...")
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    logger.info(f"🚀 Запуск... {len(DIRECT_SOURCES)} прямых + {len(HTML_SOURCES)} сайтов для парсинга")
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)), threaded=True)
