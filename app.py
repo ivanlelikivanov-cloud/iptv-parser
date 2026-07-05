@@ -114,6 +114,12 @@ def get_category(name):
     else:
         return 'Общие'
 
+def is_adult(name):
+    """Фильтр 18+"""
+    n = name.lower()
+    adult_words = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'sexo', 'nude', 'erotic']
+    return any(word in n for word in adult_words)
+
 def check_channel(url):
     try:
         r = requests.head(url, timeout=3, headers=HEADERS, allow_redirects=True)
@@ -146,7 +152,7 @@ def update_cache():
                         match = re.search(r',(.+)$', line)
                         name = match.group(1).strip() if match else ""
                     elif line.startswith('http') and line not in seen:
-                        if re.search(r'[\u0400-\u04FF]', name):
+                        if re.search(r'[\u0400-\u04FF]', name) and not is_adult(name):
                             seen.add(line)
                             raw_channels.append({'inf': inf, 'url': line})
         except:
