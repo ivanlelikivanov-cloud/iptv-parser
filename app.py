@@ -9,9 +9,8 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== РАСШИРЕННЫЙ СПИСОК ИСТОЧНИКОВ ====================
+# ==================== ИСТОЧНИКИ ====================
 SOURCES = [
-    # IPTV-ORG основные
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -22,44 +21,29 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
-    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
-    
-    # Категории IPTV-ORG
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
     "https://iptv-org.github.io/iptv/categories/music.m3u",
     "https://iptv-org.github.io/iptv/categories/kids.m3u",
-    "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
-    "https://iptv-org.github.io/iptv/categories/documentary.m3u",
-    
-    # GitHub репозитории
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
     "https://raw.githubusercontent.com/blackbirdstudiorus/IPTVPlay/main/IPTVPlay.m3u",
-    "https://raw.githubusercontent.com/MichaelJorky/Free-IPTV-M3U-Playlist/main/iptv-russia.m3u",
-    
-    # m3u.su
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
-    "https://m3u.su/m3u/ru_4k.m3u",
     "https://m3u.su/m3u/ru_sport.m3u",
     "https://m3u.su/m3u/ru_kino.m3u",
-    "https://m3u.su/m3u/ru_deti.m3u",
-    
-    # Другие
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
 # ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 3000
-MAX_WORKERS = 12
-CHECK_TIMEOUT = 3.5
+MAX_CHANNELS = 2500
+MAX_WORKERS = 25
+CHECK_TIMEOUT = 2.8
 UPDATE_INTERVAL = 1800
 
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro — загрузка...\n"
@@ -96,18 +80,32 @@ def is_adult(name):
     return any(w in n for w in ['xxx', 'adult', 'porn', 'sex', '18+', 'эротика', 'порно'])
 
 def check_channel(url):
+    """Улучшенная проверка с Content-Type"""
     try:
         r = requests.head(url, timeout=CHECK_TIMEOUT, headers=HEADERS, allow_redirects=True)
-        return r.status_code < 400
+        if r.status_code >= 400:
+            return False
+        content_type = r.headers.get('Content-Type', '').lower()
+        # Принимаем только видеопотоки и m3u
+        if any(x in content_type for x in ['video/', 'mpegurl', 'mpegurl', 'mp2t', 'application/octet-stream', 'binary']):
+            return True
+        # Некоторые сервера не отдают Content-Type — пробуем GET
+        if not content_type or 'text/html' in content_type:
+            r2 = requests.get(url, timeout=CHECK_TIMEOUT, headers=HEADERS, stream=True, allow_redirects=True)
+            if r2.status_code < 400:
+                ct2 = r2.headers.get('Content-Type', '').lower()
+                if any(x in ct2 for x in ['video/', 'mpegurl', 'mp2t', 'application/octet-stream']):
+                    return True
     except:
-        return False
+        pass
+    return False
 
 def update_cache():
     global playlist_cache, is_updating
     if is_updating:
         return
     is_updating = True
-    logger.info("🔄 Сбор русских каналов...")
+    logger.info("🔄 Сбор + улучшенная проверка...")
 
     try:
         raw = []
@@ -118,27 +116,44 @@ def update_cache():
                 r = requests.get(url, timeout=12, headers={'User-Agent': 'Mozilla/5.0'})
                 if r.status_code != 200:
                     continue
-                inf = name = ""
-                for line in r.text.splitlines():
-                    line = line.strip()
+                
+                lines = r.text.splitlines()
+                i = 0
+                while i < len(lines):
+                    line = lines[i].strip()
                     if line.startswith('#EXTINF:'):
                         inf = line
+                        name = ""
                         m = re.search(r',(.+)$', line)
-                        name = m.group(1).strip() if m else ""
-                    elif line.startswith('http') and line not in seen:
-                        if is_russian(name) and not is_adult(name):
-                            seen.add(line)
-                            if 'group-title=' not in inf:
-                                cat = get_category(name)
-                                inf = re.sub(r'(#EXTINF:-?\d+)', rf'\1 group-title="{cat}"', inf, count=1)
-                            raw.append({'inf': inf, 'url': line})
+                        if m:
+                            name = m.group(1).strip()
+                        
+                        # Ищем следующую http-ссылку
+                        j = i + 1
+                        while j < len(lines):
+                            next_line = lines[j].strip()
+                            if next_line.startswith('http'):
+                                stream = next_line.split()[0]
+                                if stream not in seen and is_russian(name) and not is_adult(name):
+                                    seen.add(stream)
+                                    if 'group-title=' not in inf:
+                                        cat = get_category(name)
+                                        inf = re.sub(r'(#EXTINF:-?\d+)', rf'\1 group-title="{cat}"', inf, count=1)
+                                    raw.append({'inf': inf, 'url': stream})
+                                break
+                            elif next_line.startswith('#EXTINF:'):
+                                break
+                            j += 1
+                        i = j
+                    else:
+                        i += 1
             except:
                 continue
 
             if len(raw) >= MAX_CHANNELS:
                 break
 
-        logger.info(f"Собрано {len(raw)}. Проверяю...")
+        logger.info(f"Собрано {len(raw)}. Проверяю с Content-Type...")
 
         alive = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -186,14 +201,21 @@ threading.Thread(target=background, daemon=True).start()
 def home():
     return """
     <h1>🇷🇺 IPTV Russia Pro</h1>
-    <p>Только русские рабочие каналы</p>
+    <p>Улучшенная проверка + Content-Type</p>
     <p><a href="/playlist.m3u" style="font-size:22px">📥 Скачать плейлист</a></p>
     """
 
 @app.route('/playlist.m3u')
 def playlist():
     with cache_lock:
-        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
+        return Response(
+            playlist_cache,
+            mimetype='application/vnd.apple.mpegurl',
+            headers={
+                'Content-Disposition': 'attachment; filename=iptv_russia_pro.m3u',
+                'Cache-Control': 'public, max-age=300'
+            }
+        )
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
