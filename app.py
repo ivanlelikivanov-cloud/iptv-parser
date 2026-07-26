@@ -4,189 +4,216 @@ import time
 import logging
 import threading
 import requests
-import urllib3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, Response
-
-# Отключаем предупреждения о самоподписанных SSL-сертификатах
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
 # ==================== ИСТОЧНИКИ ====================
-STATIC_SOURCES = [
+SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-mos.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-spb.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
+    "https://iptv-org.github.io/iptv/categories/music.m3u",
     "https://iptv-org.github.io/iptv/categories/kids.m3u",
+    "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
+    "https://iptv-org.github.io/iptv/categories/documentary.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
+    "https://raw.githubusercontent.com/blackbirdstudiorus/IPTVPlay/main/IPTVPlay.m3u",
+    "https://raw.githubusercontent.com/MichaelJorky/Free-IPTV-M3U-Playlist/main/iptv-russia.m3u",
     "https://m3u.su/m3u/sng.m3u",
-    "https://m3u.su/m3u/ru.m3u",
+    "https://m3u.su/m3u/ru_hd.m3u",
+    "https://m3u.su/m3u/ru_4k.m3u",
+    "https://m3u.su/m3u/ru_sport.m3u",
+    "https://m3u.su/m3u/ru_kino.m3u",
+    "https://m3u.su/m3u/ru_deti.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
-HTML_SOURCES = [
-    "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
-    "https://6x6.msk.ru/",
-    "https://homtv.ru/",
-    "https://iptv-rus.com/",
-    "https://pikniktv.info/viewtopic.php?t=6737",
-    "https://m3u.su/",
-    "https://webarmen.com/my/iptv/",
+# ==================== РАСШИРЕННЫЙ СПИСОК РОССИЙСКИХ КАНАЛОВ ====================
+KNOWN_RU = [
+    # Федеральные
+    'первый', 'россия', 'нтв', 'рен', 'тнт', 'стс', 'дом', 'пятница', 'звезда',
+    'матч', 'карусель', 'муз', 'ю', 'тв3', 'перец', 'че', '2x2', 'mtv', 'bridge',
+    'пять', 'известия', 'мир', 'отр', 'спартик', 'союз', 'тв центр', 'твц',
+    '1tv', 'russia', 'matchtv', 'vgtrk',
+    
+    # Региональные и города
+    'москва', 'спб', 'петербург', 'ленинград', 'екатеринбург', 'новосибирск',
+    'красноярск', 'владивосток', 'хабаровск', 'самара', 'казань', 'уфа',
+    'челябинск', 'омск', 'ростов', 'краснодар', 'воронеж', 'пермь', 'волгоград',
+    'саратов', 'тюмень', 'иркутск', 'барнаул', 'хакасия', 'якутия', 'бурятия',
+    'дагестан', 'чечня', 'ингушетия', 'кабардино', 'карачаево', 'адыгея',
+    'калмыкия', 'мордовия', 'чувашия', 'марий', 'удмуртия', 'коми', 'карелия',
+    'архангельск', 'мурманск', 'псков', 'новгород', 'тверь', 'ярославль',
+    'кострома', 'владимир', 'рязань', 'тула', 'калуга', 'смоленск', 'брянск',
+    'орёл', 'курск', 'белгород', 'липецк', 'тамбов', 'пенза', 'ульяновск',
+    'астрахань', 'киров', 'ижевск', 'сыктывкар', 'петрозаводск',
+    
+    # Популярные бренды
+    'кинопоказ', 'кинохит', 'наш кино', 'русский иллюзион', 'еврокино',
+    'охота и рыбалка', 'усадьба', 'живи', 'доктор', 'наука', 'моя планета',
+    'история', 'культура', 'ртр'
 ]
 
 # ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS_TO_PARSE = 4000
-MAX_WORKERS = 50
-CHECK_TIMEOUT = 3.0
-UPDATE_EVERY = 1800
+MAX_CHANNELS = 4000
+MAX_WORKERS = 25
+CHECK_TIMEOUT = 2.7
+UPDATE_INTERVAL = 1800
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro — идёт проверка каналов...\n"
+playlist_cache = "#EXTM3U\n# IPTV Russia Pro — расширенный сбор...\n"
 cache_lock = threading.Lock()
 is_updating = False
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-HEADERS_PLAYER = {
-    'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
-    'Connection': 'close',
-}
-
-# ==================== ФУНКЦИИ ====================
-def fetch_dynamic():
-    found = set()
-    for page in HTML_SOURCES:
-        try:
-            r = requests.get(page, headers=HEADERS_WEB, timeout=10, verify=False)
-            if r.status_code == 200:
-                links = re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', r.text, re.I)
-                found.update(links)
-        except Exception as e:
-            logger.debug(f"Пропуск {page}: {e}")
-    return list(found)
+HEADERS = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 
 def get_category(name):
     n = name.lower()
-    if any(x in n for x in ['новости', 'news', '24', 'вести', 'информ', 'дождь', 'мир']):
+    if any(k in n for k in ['новости', 'news', '24', 'вести', 'информ']):
         return 'Новости'
-    if any(x in n for x in ['кино', 'movie', 'film', 'сериал', 'hd', 'fox', 'tv1000']):
+    if any(k in n for k in ['кино', 'movie', 'film', 'сериал']):
         return 'Кино'
-    if any(x in n for x in ['музыка', 'music', 'хит', 'radio', 'mtv', 'bridge', 'ru']):
+    if any(k in n for k in ['музыка', 'music', 'хит', 'radio']):
         return 'Музыка'
-    if any(x in n for x in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl']):
+    if any(k in n for k in ['спорт', 'sport', 'футбол', 'матч']):
         return 'Спорт'
-    if any(x in n for x in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'gulli']):
+    if any(k in n for k in ['дет', 'kids', 'мульт', 'карусель']):
         return 'Детские'
-    if any(x in n for x in ['докум', 'doc', 'познав', 'history', 'discovery']):
-        return 'Познавательные'
     return 'Общие'
+
+def is_russian(name, url=""):
+    if not name:
+        return False
+    
+    name_l = name.lower()
+    url_l = url.lower()
+    
+    # 1. Есть кириллица
+    if re.search(r'[\u0400-\u04FF]', name):
+        exclude = [
+            'украина', 'ukraine', 'беларусь', 'belarus', 'казахстан', 'kazakhstan',
+            'армения', 'armenia', 'грузия', 'georgia', 'азербайджан', 'azerbaijan',
+            'молдова', 'moldova', 'кыргызстан', 'таджикистан', 'узбекистан'
+        ]
+        if any(x in name_l for x in exclude):
+            return False
+        return True
+    
+    # 2. Известные российские названия
+    if any(k in name_l for k in KNOWN_RU):
+        return True
+    
+    # 3. URL указывает на Россию
+    if any(x in url_l for x in [
+        '.ru/', '.рф/', 'russia', 'moscow', 'moskva', 'siberia', 'ural',
+        'spb', 'leningrad', 'novosibirsk', 'ekaterinburg', 'vladivostok'
+    ]):
+        return True
+    
+    return False
 
 def is_adult(name):
     n = name.lower()
-    bad = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'nude', 'playboy']
-    return any(w in n for w in bad)
+    return any(w in n for w in ['xxx', 'adult', 'porn', 'sex', '18+', 'эротика', 'порно'])
 
-def is_russian(name):
-    return bool(re.search(r'[\u0400-\u04FF]', name))
-
-def check_one(url):
-    valid_content_types = ['video/', 'mpegurl', 'octet-stream', 'audio/', 'application/x-mpegurl']
-    
+def check_channel(url):
     try:
-        r = requests.head(url, timeout=CHECK_TIMEOUT, headers=HEADERS_PLAYER, allow_redirects=True, verify=False)
-        if r.status_code < 400:
-            ct = r.headers.get('content-type', '').lower()
-            if any(valid in ct for valid in valid_content_types):
-                return True
+        r = requests.head(url, timeout=CHECK_TIMEOUT, headers=HEADERS, allow_redirects=True)
+        if r.status_code >= 400:
+            return False
+        ct = r.headers.get('Content-Type', '').lower()
+        if any(x in ct for x in ['video/', 'mpegurl', 'mp2t', 'application/octet-stream']):
+            return True
+        r2 = requests.get(url, timeout=CHECK_TIMEOUT, headers=HEADERS, stream=True, allow_redirects=True)
+        if r2.status_code < 400:
+            ct2 = r2.headers.get('Content-Type', '').lower()
+            return any(x in ct2 for x in ['video/', 'mpegurl', 'mp2t', 'application/octet-stream'])
     except:
         pass
-    
-    try:
-        r = requests.get(url, timeout=CHECK_TIMEOUT, headers=HEADERS_PLAYER, stream=True, allow_redirects=True, verify=False)
-        if r.status_code < 400:
-            ct = r.headers.get('content-type', '').lower()
-            if any(valid in ct for valid in valid_content_types):
-                next(r.iter_content(chunk_size=1024), None)
-                return True
-    except:
-        pass
-        
     return False
 
 def update_cache():
     global playlist_cache, is_updating
     if is_updating:
         return
-    
     is_updating = True
-    logger.info("🔄 Запуск проверки каналов...")
-    start_time = time.time()
+    logger.info("🔄 Расширенный сбор российских каналов...")
 
     try:
-        sources = list(set(STATIC_SOURCES + fetch_dynamic()))
-        logger.info(f"Источников: {len(sources)}")
-
         raw = []
-        seen_urls = set()
-        
-        for src in sources:
+        seen = set()
+
+        for url in SOURCES:
             try:
-                r = requests.get(src, timeout=10, headers=HEADERS_WEB, verify=False)
+                r = requests.get(url, timeout=12, headers={'User-Agent': 'Mozilla/5.0'})
                 if r.status_code != 200:
                     continue
                 
-                current_inf = ""
-                current_name = ""
-                
-                for line in r.text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                        
+                lines = r.text.splitlines()
+                i = 0
+                while i < len(lines):
+                    line = lines[i].strip()
                     if line.startswith('#EXTINF:'):
-                        current_inf = line
-                        match = re.search(r',\s*(.+)$', line)
-                        current_name = match.group(1).strip() if match else ""
-                    elif line.startswith('http'):
-                        if current_name and is_russian(current_name) and not is_adult(current_name):
-                            if line not in seen_urls:
-                                seen_urls.add(line)
-                                
-                                if 'group-title=' not in current_inf:
-                                    cat = get_category(current_name)
-                                    current_inf = re.sub(r'(#EXTINF:-?\d+\s*)', rf'\1group-title="{cat}" ', current_inf, count=1)
-                                
-                                raw.append({'inf': current_inf, 'url': line})
-                                
-                                if len(raw) >= MAX_CHANNELS_TO_PARSE:
-                                    break
+                        inf = line
+                        name = ""
+                        m = re.search(r',(.+)$', line)
+                        if m:
+                            name = m.group(1).strip()
                         
-                        current_inf = ""
-                        current_name = ""
-                        
-                if len(raw) >= MAX_CHANNELS_TO_PARSE:
-                    break
-            except Exception as e:
-                logger.debug(f"Ошибка {src}: {e}")
+                        j = i + 1
+                        while j < len(lines):
+                            next_line = lines[j].strip()
+                            if next_line.startswith('http'):
+                                stream = next_line.split()[0]
+                                if stream not in seen and is_russian(name, stream) and not is_adult(name):
+                                    seen.add(stream)
+                                    if 'tvg-language=' not in inf:
+                                        inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 tvg-language="ru"', inf, count=1)
+                                    if 'group-title=' not in inf:
+                                        cat = get_category(name)
+                                        inf = re.sub(r'(#EXTINF:-?\d+)', rf'\1 group-title="{cat}"', inf, count=1)
+                                    raw.append({'inf': inf, 'url': stream})
+                                break
+                            elif next_line.startswith('#EXTINF:'):
+                                break
+                            j += 1
+                        i = j
+                    else:
+                        i += 1
+            except:
                 continue
 
-        logger.info(f"Собрано {len(raw)} каналов. Проверка...")
+            if len(raw) >= MAX_CHANNELS:
+                break
+
+        logger.info(f"Собрано {len(raw)}. Проверяю...")
 
         alive = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_to_data = {executor.submit(check_one, ch['url']): ch for ch in raw}
-            
-            for future in as_completed(future_to_data):
-                ch = future_to_data[future]
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            future_map = {pool.submit(check_channel, ch['url']): ch for ch in raw}
+            for future in as_completed(future_map):
+                ch = future_map[future]
                 try:
                     if future.result():
                         alive.append(ch)
@@ -195,8 +222,8 @@ def update_cache():
 
         lines = [
             "#EXTM3U",
-            f"# 🇺 IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}",
-            f"# Работает: {len(alive)} каналов",
+            f"# 🇷🇺 IPTV Russia Pro — {time.strftime('%Y-%m-%d %H:%M')}",
+            f"# Рабочих российских каналов: {len(alive)}"
         ]
         for ch in alive:
             lines.append(ch['inf'])
@@ -205,49 +232,38 @@ def update_cache():
         with cache_lock:
             playlist_cache = "\n".join(lines)
 
-        elapsed = time.time() - start_time
-        logger.info(f"✅ Готово! Каналов: {len(alive)}. Время: {elapsed:.1f} сек")
+        logger.info(f"✅ Готово! Живых: {len(alive)}")
 
     except Exception as e:
         logger.error(f"Ошибка: {e}")
     finally:
         is_updating = False
 
-def background_worker():
+def background():
     while True:
         try:
             update_cache()
         except Exception as e:
-            logger.error(f"Фоновая ошибка: {e}")
+            logger.error(f"Фон: {e}")
             global is_updating
             is_updating = False
-        time.sleep(UPDATE_EVERY)
+        time.sleep(UPDATE_INTERVAL)
 
-threading.Thread(target=background_worker, daemon=True).start()
+threading.Thread(target=background, daemon=True).start()
 
 @app.route('/')
 def home():
     return """
     <h1>🇷🇺 IPTV Russia Pro</h1>
-    <p>Проверка каналов в реальном времени</p>
+    <p>Расширенный фильтр + федеральные + региональные</p>
     <p><a href="/playlist.m3u" style="font-size:22px">📥 Скачать плейлист</a></p>
     """
 
 @app.route('/playlist.m3u')
-@app.route('/playlist.m3u8')
 def playlist():
     with cache_lock:
-        response = Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
-        response.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_pro.m3u"'
-        response.headers['Cache-Control'] = 'public, max-age=900'
-        return response
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск на порту {port}")
-    
-    try:
-        from waitress import serve
-        serve(app, host='0.0.0.0', port=port, threads=10)
-    except ImportError:
-        app.run(host='0.0.0.0', port=port, threaded=True)
+    app.run(host='0.0.0.0', port=port, threaded=True)
