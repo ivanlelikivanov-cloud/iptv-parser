@@ -9,8 +9,9 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== ТОЛЬКО НАДЁЖНЫЕ ИСТОЧНИКИ ====================
+# ==================== БОЛЬШОЙ СПИСОК ПРЯМЫХ ИСТОЧНИКОВ ====================
 SOURCES = [
+    # IPTV-ORG
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -19,16 +20,38 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-ural.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-sib.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
+    
+    # GitHub
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
+    "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    
+    # m3u.su
     "https://m3u.su/m3u/sng.m3u",
+    "https://m3u.su/m3u/ru_hd.m3u",
+    "https://m3u.su/m3u/ru_4k.m3u",
+    "https://m3u.su/m3u/ru_sport.m3u",
+    "https://m3u.su/m3u/ru_kino.m3u",
+    "https://m3u.su/m3u/ru_deti.m3u",
+    
+    # Другие
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://iptv-org.github.io/iptv/categories/news.m3u",
+    "https://iptv-org.github.io/iptv/categories/movies.m3u",
+    "https://iptv-org.github.io/iptv/categories/sports.m3u",
+    "https://iptv-org.github.io/iptv/categories/music.m3u",
+    "https://iptv-org.github.io/iptv/categories/kids.m3u",
 ]
 
-# ==================== НАСТРОЙКИ (лёгкие) ====================
-MAX_CHANNELS = 1200
-MAX_WORKERS = 8
+# ==================== НАСТРОЙКИ ====================
+MAX_CHANNELS = 2500
+MAX_WORKERS = 10
 CHECK_TIMEOUT = 3.5
 UPDATE_INTERVAL = 1800
 
@@ -43,7 +66,7 @@ HEADERS = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 
 def get_category(name):
     n = name.lower()
-    if any(k in n for k in ['новости', 'news', '24', 'вести']):
+    if any(k in n for k in ['новости', 'news', '24', 'вести', 'информ']):
         return 'Новости'
     if any(k in n for k in ['кино', 'movie', 'film', 'сериал']):
         return 'Кино'
@@ -56,9 +79,7 @@ def get_category(name):
     return 'Общие'
 
 def is_russian(name):
-    if not name:
-        return False
-    if not re.search(r'[\u0400-\u04FF]', name):
+    if not name or not re.search(r'[\u0400-\u04FF]', name):
         return False
     bad = ['украина', 'ukraine', 'беларусь', 'belarus', 'казахстан', 'kazakhstan']
     return not any(x in name.lower() for x in bad)
@@ -79,7 +100,7 @@ def update_cache():
     if is_updating:
         return
     is_updating = True
-    logger.info("🔄 Начинаю сбор русских каналов...")
+    logger.info("🔄 Сбор русских каналов...")
 
     try:
         raw = []
@@ -110,7 +131,7 @@ def update_cache():
             if len(raw) >= MAX_CHANNELS:
                 break
 
-        logger.info(f"Собрано {len(raw)} каналов. Проверяю...")
+        logger.info(f"Собрано {len(raw)}. Проверяю...")
 
         alive = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
