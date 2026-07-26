@@ -9,9 +9,9 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== БОЛЬШОЙ СПИСОК ПРЯМЫХ ИСТОЧНИКОВ ====================
+# ==================== РАСШИРЕННЫЙ СПИСОК ИСТОЧНИКОВ ====================
 SOURCES = [
-    # IPTV-ORG
+    # IPTV-ORG основные
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -24,13 +24,25 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
     
-    # GitHub
+    # Категории IPTV-ORG
+    "https://iptv-org.github.io/iptv/categories/news.m3u",
+    "https://iptv-org.github.io/iptv/categories/movies.m3u",
+    "https://iptv-org.github.io/iptv/categories/sports.m3u",
+    "https://iptv-org.github.io/iptv/categories/music.m3u",
+    "https://iptv-org.github.io/iptv/categories/kids.m3u",
+    "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
+    "https://iptv-org.github.io/iptv/categories/documentary.m3u",
+    
+    # GitHub репозитории
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
+    "https://raw.githubusercontent.com/blackbirdstudiorus/IPTVPlay/main/IPTVPlay.m3u",
+    "https://raw.githubusercontent.com/MichaelJorky/Free-IPTV-M3U-Playlist/main/iptv-russia.m3u",
     
     # m3u.su
     "https://m3u.su/m3u/sng.m3u",
@@ -42,16 +54,11 @@ SOURCES = [
     
     # Другие
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
-    "https://iptv-org.github.io/iptv/categories/news.m3u",
-    "https://iptv-org.github.io/iptv/categories/movies.m3u",
-    "https://iptv-org.github.io/iptv/categories/sports.m3u",
-    "https://iptv-org.github.io/iptv/categories/music.m3u",
-    "https://iptv-org.github.io/iptv/categories/kids.m3u",
 ]
 
 # ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 2500
-MAX_WORKERS = 10
+MAX_CHANNELS = 3000
+MAX_WORKERS = 12
 CHECK_TIMEOUT = 3.5
 UPDATE_INTERVAL = 1800
 
