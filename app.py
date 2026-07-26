@@ -9,8 +9,9 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-# ==================== ИСТОЧНИКИ ====================
+# ==================== МАКСИМУМ ПРЯМЫХ ИСТОЧНИКОВ ====================
 SOURCES = [
+    # IPTV-ORG (самый надёжный)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
@@ -21,32 +22,43 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-far-east.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-volga.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-south.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-northwest.m3u",
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
     "https://iptv-org.github.io/iptv/categories/music.m3u",
     "https://iptv-org.github.io/iptv/categories/kids.m3u",
+    "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
+    "https://iptv-org.github.io/iptv/categories/documentary.m3u",
+    
+    # GitHub
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/alexeyvaneev/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/sknk/iptv/master/kvas.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
     "https://raw.githubusercontent.com/blackbirdstudiorus/IPTVPlay/main/IPTVPlay.m3u",
+    "https://raw.githubusercontent.com/MichaelJorky/Free-IPTV-M3U-Playlist/main/iptv-russia.m3u",
+    
+    # m3u.su и другие
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru_hd.m3u",
+    "https://m3u.su/m3u/ru_4k.m3u",
     "https://m3u.su/m3u/ru_sport.m3u",
     "https://m3u.su/m3u/ru_kino.m3u",
+    "https://m3u.su/m3u/ru_deti.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
 # ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 2500
-MAX_WORKERS = 25
+MAX_CHANNELS = 3000
+MAX_WORKERS = 20
 CHECK_TIMEOUT = 2.8
 UPDATE_INTERVAL = 1800
 
-playlist_cache = "#EXTM3U\n# IPTV Russia Pro — загрузка...\n"
+playlist_cache = "#EXTM3U\n# IPTV Russia Pro — сборка...\n"
 cache_lock = threading.Lock()
 is_updating = False
 
@@ -80,22 +92,18 @@ def is_adult(name):
     return any(w in n for w in ['xxx', 'adult', 'porn', 'sex', '18+', 'эротика', 'порно'])
 
 def check_channel(url):
-    """Улучшенная проверка с Content-Type"""
     try:
         r = requests.head(url, timeout=CHECK_TIMEOUT, headers=HEADERS, allow_redirects=True)
         if r.status_code >= 400:
             return False
-        content_type = r.headers.get('Content-Type', '').lower()
-        # Принимаем только видеопотоки и m3u
-        if any(x in content_type for x in ['video/', 'mpegurl', 'mpegurl', 'mp2t', 'application/octet-stream', 'binary']):
+        ct = r.headers.get('Content-Type', '').lower()
+        if any(x in ct for x in ['video/', 'mpegurl', 'mp2t', 'application/octet-stream']):
             return True
-        # Некоторые сервера не отдают Content-Type — пробуем GET
-        if not content_type or 'text/html' in content_type:
-            r2 = requests.get(url, timeout=CHECK_TIMEOUT, headers=HEADERS, stream=True, allow_redirects=True)
-            if r2.status_code < 400:
-                ct2 = r2.headers.get('Content-Type', '').lower()
-                if any(x in ct2 for x in ['video/', 'mpegurl', 'mp2t', 'application/octet-stream']):
-                    return True
+        # Дополнительная проверка
+        r2 = requests.get(url, timeout=CHECK_TIMEOUT, headers=HEADERS, stream=True, allow_redirects=True)
+        if r2.status_code < 400:
+            ct2 = r2.headers.get('Content-Type', '').lower()
+            return any(x in ct2 for x in ['video/', 'mpegurl', 'mp2t', 'application/octet-stream'])
     except:
         pass
     return False
@@ -105,7 +113,7 @@ def update_cache():
     if is_updating:
         return
     is_updating = True
-    logger.info("🔄 Сбор + улучшенная проверка...")
+    logger.info("🔄 Максимальный сбор русских каналов...")
 
     try:
         raw = []
@@ -128,7 +136,6 @@ def update_cache():
                         if m:
                             name = m.group(1).strip()
                         
-                        # Ищем следующую http-ссылку
                         j = i + 1
                         while j < len(lines):
                             next_line = lines[j].strip()
@@ -153,7 +160,7 @@ def update_cache():
             if len(raw) >= MAX_CHANNELS:
                 break
 
-        logger.info(f"Собрано {len(raw)}. Проверяю с Content-Type...")
+        logger.info(f"Собрано {len(raw)}. Жёсткая проверка...")
 
         alive = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -201,21 +208,14 @@ threading.Thread(target=background, daemon=True).start()
 def home():
     return """
     <h1>🇷🇺 IPTV Russia Pro</h1>
-    <p>Улучшенная проверка + Content-Type</p>
+    <p>Максимальный сбор + проверка</p>
     <p><a href="/playlist.m3u" style="font-size:22px">📥 Скачать плейлист</a></p>
     """
 
 @app.route('/playlist.m3u')
 def playlist():
     with cache_lock:
-        return Response(
-            playlist_cache,
-            mimetype='application/vnd.apple.mpegurl',
-            headers={
-                'Content-Disposition': 'attachment; filename=iptv_russia_pro.m3u',
-                'Cache-Control': 'public, max-age=300'
-            }
-        )
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
