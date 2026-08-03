@@ -71,7 +71,6 @@ FALLBACK_REGIONS = [
     "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
-# ==================== РАЗВЕДКА: КОНФИГ ====================
 GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv']
 GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
                    'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
@@ -79,10 +78,10 @@ PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
 WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia']
 TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru']
 
-# ==================== НАСТРОЙКИ ====================
+# ==================== НАСТРОЙКИ (щадящие для free-тарифа) ====================
 MAX_CHANNELS = 15000
-SOURCE_WORKERS = 40
-CHECK_WORKERS = 150
+SOURCE_WORKERS = 25
+CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
 UPDATE_EVERY = 86400
 
@@ -124,7 +123,7 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== РАЗВЕДКА ПО ПЛАТФОРМАМ ====================
+# ==================== РАЗВЕДКА ====================
 def fetch_dynamic():
     found = set()
     for page in HTML_SOURCES:
@@ -229,7 +228,6 @@ def fetch_bitbucket():
     return list(found)
 
 def fetch_gitea_family():
-    """Codeberg + Gitea"""
     found = set()
     apis = [
         ('https://codeberg.org/api/v1/repos/search?q=iptv&limit=15',
@@ -252,7 +250,6 @@ def fetch_gitea_family():
     return list(found)
 
 def fetch_web_search():
-    """DuckDuckGo: прямые m3u + парсинг найденных страниц"""
     m3u = set()
     pages = []
     for q in WEB_QUERIES:
@@ -440,7 +437,7 @@ def check_one(ch):
 
     return False
 
-# ==================== ПАРСЕР M3U ====================
+# ==================== ПАРСЕР ====================
 def parse_m3u(text, entries, seen_urls):
     current_inf = ''
     current_name = ''
@@ -480,7 +477,7 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ (GitHub/GitLab/Bitbucket/Codeberg/Gitea/Web/TG)...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ...")
 
     try:
         api_channels = fetch_iptv_org_api()
@@ -494,7 +491,7 @@ def update_cache():
         sources = list(set(STATIC_SOURCES + regions + fetch_dynamic() + fetch_github()
                            + fetch_gitlab() + fetch_bitbucket() + fetch_gitea_family()
                            + fetch_web_search() + fetch_telegram()))
-        logger.info(f"ВСЕГО источников со всех платформ: {len(sources)}")
+        logger.info(f"ВСЕГО источников: {len(sources)}")
 
         texts = []
         with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as ex:
@@ -529,7 +526,7 @@ def update_cache():
                 break
 
         raw = list(entries.values())
-        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
+        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек)...")
 
         alive = []
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
@@ -593,7 +590,15 @@ def background_worker():
 
 threading.Thread(target=background_worker, daemon=True).start()
 
-# ==================== ВЕБ ====================
+# ==================== ВЕБ (404 НЕВОЗМОЖЕН) ====================
+def make_playlist_response():
+    with cache_lock:
+        data = playlist_cache
+    resp = Response(data, mimetype='application/vnd.apple.mpegurl')
+    resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
+    resp.headers['Cache-Control'] = 'public, max-age=3600'
+    return resp
+
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -611,7 +616,7 @@ h1{margin:0 0 8px;font-size:32px}
 .stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷🇺 IPTV Russia Pro MAX</h1>
+<h1>🇷 IPTV Russia Pro MAX</h1>
 <div class="sub">GitHub • GitLab • Bitbucket • Codeberg • Gitea • Web • TG • iptv-org</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
@@ -626,8 +631,7 @@ h1{margin:0 0 8px;font-size:32px}
 <div>__CATS__</div>
 </div></body></html>"""
 
-@app.route('/')
-def home():
+def make_home_page():
     with cache_lock:
         s = dict(stats)
     cats = s.get('categories', {})
@@ -643,14 +647,21 @@ def home():
     page = page.replace('__CATS__', cat_html)
     return page
 
+@app.route('/')
+def home():
+    return make_home_page()
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'})
+
 @app.route('/playlist.m3u')
 @app.route('/playlist.m3u8')
+@app.route('/playlist')
+@app.route('/tv.m3u')
+@app.route('/iptv.m3u')
 def playlist():
-    with cache_lock:
-        resp = Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
-        resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
-        resp.headers['Cache-Control'] = 'public, max-age=3600'
-        return resp
+    return make_playlist_response()
 
 @app.route('/status')
 def status():
@@ -666,11 +677,19 @@ def refresh():
     threading.Thread(target=update_cache, daemon=True).start()
     return jsonify({'status': 'refresh_started'})
 
+@app.route('/<path:any_path>')
+def fallback(any_path):
+    """ЛЮБОЙ другой путь: если похоже на плейлист — отдаём плейлист, иначе главная"""
+    p = any_path.lower()
+    if p.endswith(('.m3u', '.m3u8')) or 'playlist' in p or 'm3u' in p:
+        return make_playlist_response()
+    return make_home_page()
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск на порту {port}")
     try:
         from waitress import serve
-        serve(app, host='0.0.0.0', port=port, threads=12)
+        serve(app, host='0.0.0.0', port=port, threads=8)
     except ImportError:
         app.run(host='0.0.0.0', port=port, threaded=True)
