@@ -14,12 +14,6 @@ from requests.adapters import HTTPAdapter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, Response, jsonify
 
-try:
-    from sklearn.linear_model import SGDClassifier
-    HAS_SKLEARN = True
-except Exception:
-    HAS_SKLEARN = False
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
@@ -154,11 +148,11 @@ TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru
                'iptv_2026', 'm3u8ru', 'iptv_playlist_ru', 'tv_m3u', 'iptvhub_ru']
 
 # ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 20000
+MAX_CHANNELS = 12000          # снижено: экономия RAM
 MAX_EXTRA_SOURCES = 200
 MAX_CHECK_POOL = 5000
-SOURCE_WORKERS = 20
-CHECK_WORKERS = 80
+SOURCE_WORKERS = 15
+CHECK_WORKERS = 40
 CHECK_TIMEOUT = 40.0
 SEED_TIMEOUT = 8.0
 SOURCE_PHASE_MAX = 240
@@ -167,7 +161,9 @@ UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 10
 HEARTBEAT_SEC = 20
-KEEPALIVE_SEC = 300
+KEEPALIVE_SEC = 60
+MAX_PLAYLIST_BYTES = 2_000_000   # 2 МБ на плейлист
+MAX_HTML_BYTES = 524_288         # 512 КБ на HTML-страницу
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -189,7 +185,7 @@ stats = {
     "categories": {},
     "ml_samples": 0,
     "ml_accuracy": 0.0,
-    "ml_on": HAS_SKLEARN,
+    "ml_on": True,
 }
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -209,7 +205,32 @@ CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
 DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
 MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
 
-# ==================== ML-МОЗГ ====================
+# ==================== НЕЙРОНКА С L2-РЕГУЛЯРИЗАЦИЕЙ ====================
+def _sig(z):
+    if z >= 0:
+        return 1.0 / (1.0 + math.exp(-z))
+    ez = math.exp(z)
+    return ez / (1.0 + ez)
+
+class TinyLR:
+    def __init__(self, n=12):
+        self.w = [0.0] * n
+        self.b = 0.0
+
+    def prob(self, x):
+        z = self.b + sum(wi * xi for wi, xi in zip(self.w, x))
+        return _sig(z)
+
+    def partial_fit(self, X, y, lr=0.3, epochs=2, l2=0.001):
+        """SGD + L2-штраф: не даём весам раздуваться на 1-2 признаках"""
+        for _ in range(epochs):
+            for x, t in zip(X, y):
+                e = self.prob(x) - t
+                for i, xi in enumerate(x):
+                    self.w[i] = self.w[i] * (1.0 - l2) - lr * e * xi
+                self.b -= lr * e
+
+# ==================== ML-МОЗГ (потокобезопасный) ====================
 class MLBrain:
     def __init__(self):
         self.host_alive = {}
@@ -218,7 +239,7 @@ class MLBrain:
         self.trained_samples = 0
         self.last_accuracy = 0.0
         self.db = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()   # RLock: можно вкладываться
         try:
             self.db = sqlite3.connect(DB_FILE, check_same_thread=False)
             with self.lock:
@@ -234,23 +255,25 @@ class MLBrain:
             logger.error(f"🧠 ML: БД недоступна: {e}")
             self.db = None
         try:
-            if HAS_SKLEARN and os.path.exists(MODEL_FILE):
+            if os.path.exists(MODEL_FILE):
                 with open(MODEL_FILE, 'rb') as f:
                     self.model = pickle.load(f)
-                logger.info("🧠 ML: модель загружена с диска")
+                logger.info("🧠 ML: нейрон загружен с диска")
         except Exception:
             self.model = None
 
     def host_stats(self, host):
-        t = self.host_total.get(host, 0)
-        a = self.host_alive.get(host, 0)
+        with self.lock:
+            t = self.host_total.get(host, 0)
+            a = self.host_alive.get(host, 0)
         if t == 0:
             return 0.5, 0
         return (a + 1.0) / (t + 2.0), t
 
     def record(self, host, alive):
-        self.host_total[host] = self.host_total.get(host, 0) + 1
-        self.host_alive[host] = self.host_alive.get(host, 0) + (1 if alive else 0)
+        with self.lock:   # вся мутация памяти под замком — гонки исключены
+            self.host_total[host] = self.host_total.get(host, 0) + 1
+            self.host_alive[host] = self.host_alive.get(host, 0) + (1 if alive else 0)
         if self.db is None:
             return
         try:
@@ -265,8 +288,7 @@ class MLBrain:
         if self.model is None:
             return None
         try:
-            z = self.model.decision_function([feats])[0]
-            return 1.0 / (1.0 + math.exp(-z))
+            return self.model.prob(feats)
         except Exception:
             return None
 
@@ -279,7 +301,7 @@ class MLBrain:
         return 0.5 * p + 0.35 * rep + 0.15 * heur
 
     def train(self, samples):
-        if not HAS_SKLEARN or not samples or len(samples) < 20:
+        if not samples or len(samples) < 20:
             return
         X = [s[0] for s in samples]
         y = [s[1] for s in samples]
@@ -288,24 +310,21 @@ class MLBrain:
         acc = None
         if self.model is not None:
             try:
-                preds = []
-                for x in X[:200]:
-                    p = self.model_prob(x)
-                    preds.append(1 if (p is not None and p > 0.5) else 0)
-                acc = sum(1 for p, t in zip(preds, y[:200]) if p == t) / max(1, len(preds))
+                preds = [1 if self.model.prob(x) > 0.5 else 0 for x in X[:300]]
+                acc = sum(1 for p, t in zip(preds, y[:300]) if p == t) / max(1, len(preds))
             except Exception:
                 acc = None
         try:
             if self.model is None:
-                self.model = SGDClassifier(loss='log_loss', learning_rate='optimal', random_state=42)
-            self.model.partial_fit(X, y, classes=[0, 1])
+                self.model = TinyLR(len(X[0]))
+            self.model.partial_fit(X, y)
             self.trained_samples += len(samples)
             if acc is not None:
                 self.last_accuracy = acc
             with open(MODEL_FILE, 'wb') as f:
                 pickle.dump(self.model, f)
             logger.info(f"🧠 ML: дообучено на {len(samples)} примерах "
-                        f"(всего {self.trained_samples}), acc до обучения: {acc if acc is not None else 'н/д'}")
+                        f"(всего {self.trained_samples}), acc до: {acc if acc is not None else 'н/д'}")
         except Exception as e:
             logger.error(f"🧠 ML: ошибка обучения: {e}")
         if self.db is not None:
@@ -339,7 +358,7 @@ def extract_features(ch):
         1.0 if 'iptv-org' in u else 0.0,
     ]
 
-# ==================== ДИСКОВЫЙ КЭШ / KEEPALIVE ====================
+# ==================== ДИСК / ПУЛЬС ====================
 def load_disk_cache():
     global playlist_cache
     try:
@@ -365,12 +384,16 @@ def save_disk_cache(data):
 SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
 
 def keepalive_worker():
+    n = 0
     while True:
         time.sleep(KEEPALIVE_SEC)
-        try:
-            requests.get(SELF_URL + '/health', timeout=10)
-        except Exception:
-            pass
+        n += 1
+        logger.info("💓 жив")
+        if n % 5 == 0:
+            try:
+                requests.get(SELF_URL + '/health', timeout=10)
+            except Exception:
+                pass
 
 _thread_local = threading.local()
 
@@ -378,7 +401,7 @@ def get_session():
     s = getattr(_thread_local, 'session', None)
     if s is None:
         s = requests.Session()
-        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=0)
+        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
         s.mount('http://', adapter)
         s.mount('https://', adapter)
         _thread_local.session = s
@@ -423,14 +446,29 @@ LATIN_RU_WORDS = _clean([
     'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
     'kinopoisk', 'illuzion'])
 
-# ==================== РАЗВЕДКА ====================
+# ==================== РАЗВЕДКА (С ЛИМИТАМИ ПАМЯТИ) ====================
+def _read_capped(resp, cap):
+    chunks = []
+    total = 0
+    for c in resp.iter_content(65536):
+        chunks.append(c)
+        total += len(c)
+        if total >= cap:
+            break
+    resp.close()
+    return b''.join(chunks).decode('utf-8', errors='ignore')
+
 def fetch_dynamic():
     found = set()
     for page in HTML_SOURCES:
         try:
-            r = get_session().get(page, headers=HEADERS_WEB, timeout=(5, 10), verify=False)
+            r = get_session().get(page, headers=HEADERS_WEB, timeout=(5, 10),
+                                  verify=False, stream=True)
             if r.status_code == 200:
-                found.update(re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', r.text, re.I))
+                html = _read_capped(r, MAX_HTML_BYTES)
+                found.update(re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', html, re.I))
+            else:
+                r.close()
         except Exception:
             pass
     return list(found)
@@ -476,14 +514,16 @@ def fetch_github():
         full, branch = repo_branch
         try:
             r = get_session().get('https://raw.githubusercontent.com/' + full + '/' + branch + '/README.md',
-                                  headers=HEADERS_WEB, timeout=(5, 10))
+                                  headers=HEADERS_WEB, timeout=(5, 10), stream=True)
             if r.status_code == 200:
-                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I)
+                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)',
+                                  _read_capped(r, MAX_HTML_BYTES), re.I)
+            r.close()
         except Exception:
             pass
         return []
 
-    ex = ThreadPoolExecutor(max_workers=15)
+    ex = ThreadPoolExecutor(max_workers=10)
     try:
         for links in ex.map(read_readme, repos, timeout=90):
             found.update(links)
@@ -574,9 +614,12 @@ def fetch_web_search():
 
     def scrape(page):
         try:
-            r = get_session().get(page, headers=HEADERS_WEB, timeout=(5, 10), verify=False)
+            r = get_session().get(page, headers=HEADERS_WEB, timeout=(5, 10),
+                                  verify=False, stream=True)
             if r.status_code == 200:
-                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I)
+                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)',
+                                  _read_capped(r, MAX_HTML_BYTES), re.I)
+            r.close()
         except Exception:
             pass
         return []
@@ -599,9 +642,13 @@ def fetch_telegram():
     found = set()
     for ch in TG_CHANNELS:
         try:
-            r = get_session().get('https://t.me/s/' + ch, headers=HEADERS_WEB, timeout=(5, 10))
+            r = get_session().get('https://t.me/s/' + ch, headers=HEADERS_WEB,
+                                  timeout=(5, 10), stream=True)
             if r.status_code == 200:
-                found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
+                found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)',
+                                        _read_capped(r, MAX_HTML_BYTES), re.I))
+            else:
+                r.close()
         except Exception:
             continue
     logger.info(f"Telegram: ссылок: {len(found)}")
@@ -646,13 +693,17 @@ def fetch_iptv_org_api():
         return []
 
 def fetch_source_text(url):
+    """Поточное чтение с лимитом 2 МБ — гигантские листы не съедают RAM"""
     try:
-        r = get_session().get(url, timeout=(5, 10), headers=HEADERS_WEB, verify=False)
-        if r.status_code == 200 and r.text:
-            return r.text
+        r = get_session().get(url, timeout=(5, 10), headers=HEADERS_WEB,
+                              verify=False, stream=True)
+        if r.status_code != 200:
+            r.close()
+            return None
+        text = _read_capped(r, MAX_PLAYLIST_BYTES)
+        return text if text else None
     except Exception:
-        pass
-    return None
+        return None
 
 # ==================== КАТЕГОРИИ И ФИЛЬТРЫ ====================
 def get_category(name):
@@ -864,17 +915,18 @@ def flush_playlist(alive, elapsed=None):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
-# ==================== ⚡ БЫСТРЫЙ СТАРТОВЫЙ НАБОР ====================
+# ==================== ⚡ БЫСТРЫЙ СТАРТ ====================
 def quick_seed():
-    """Первые каналы в плейлисте за 1-2 минуты, до конца большого прогона"""
     logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
     seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
-    texts = []
+    entries = {}
+    seen = set()
+    reasons = Counter()
     ex = ThreadPoolExecutor(max_workers=12)
     try:
         for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
             if txt:
-                texts.append(txt)
+                parse_m3u(txt, entries, seen, reasons)
     except Exception:
         pass
     finally:
@@ -883,18 +935,13 @@ def quick_seed():
         except TypeError:
             ex.shutdown(wait=False)
 
-    entries = {}
-    seen = set()
-    reasons = Counter()
-    for txt in texts:
-        parse_m3u(txt, entries, seen, reasons)
     raw = list(entries.values())[:1000]
     if not raw:
         logger.warning("⚡ Стартовый набор пуст, ждём большой прогон")
         return 0
 
     alive = []
-    ex = ThreadPoolExecutor(max_workers=60)
+    ex = ThreadPoolExecutor(max_workers=40)
     futs = {ex.submit(check_one, ch, SEED_TIMEOUT): ch for ch in raw}
     try:
         for f in as_completed(futs.keys(), timeout=90):
@@ -905,7 +952,7 @@ def quick_seed():
                 ok = False
             if ok:
                 alive.append(ch)
-            brain.record(ch.get('host', urlparse(ch['url']).netloc), ok)
+            brain.record(urlparse(ch['url']).netloc, ok)
     except Exception:
         pass
     finally:
@@ -919,7 +966,7 @@ def quick_seed():
         logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
     return len(alive)
 
-# ==================== ОБНОВЛЕНИЕ ====================
+# ==================== ОБНОВЛЕНИЕ (ПАРСИМ НА ЛЕТУ, БЕЗ СКЛАДА ТЕКСТОВ) ====================
 def update_cache():
     global playlist_cache, is_updating
     if is_updating:
@@ -929,50 +976,14 @@ def update_cache():
     logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG + ML-приоритизация...")
 
     try:
-        # ⚡ Сначала быстрый набор — плеер получает каналы сразу
         quick_seed()
-
-        api_channels = fetch_iptv_org_api()
-        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/радио): {len(api_channels)}")
-
-        regions = fetch_ru_regions()
-        if not regions:
-            regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u'
-                       for r in FALLBACK_REGIONS]
-
-        base = list(set(STATIC_SOURCES + regions))
-        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab()
-                         + fetch_bitbucket() + fetch_gitea_family()
-                         + fetch_web_search() + fetch_telegram()) - set(base))
-        sources = base + extra[:MAX_EXTRA_SOURCES]
-        logger.info(f"ВСЕГО источников: {len(sources)}")
-
-        texts = []
-        ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
-        futs = [ex.submit(fetch_source_text, u) for u in sources]
-        try:
-            for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
-                try:
-                    txt = f.result()
-                except Exception:
-                    txt = None
-                if txt:
-                    texts.append(txt)
-        except TimeoutError:
-            logger.warning(f"⏳ Таймаут фазы источников ({SOURCE_PHASE_MAX}с), беру что успело: {len(texts)}")
-        except Exception as e:
-            logger.error(f"Ошибка фазы источников: {e}")
-        finally:
-            try:
-                ex.shutdown(wait=False, cancel_futures=True)
-            except TypeError:
-                ex.shutdown(wait=False)
-        logger.info(f"Загружено плейлистов: {len(texts)}")
 
         entries = {}
         seen = set()
         reasons = Counter()
 
+        api_channels = fetch_iptv_org_api()
+        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/радио): {len(api_channels)}")
         for ach in api_channels:
             name = ach['name']
             if not name:
@@ -996,9 +1007,41 @@ def update_cache():
             else:
                 entries[key] = new_ch
 
-        for txt in texts:
-            if parse_m3u(txt, entries, seen, reasons):
-                break
+        regions = fetch_ru_regions()
+        if not regions:
+            regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u'
+                       for r in FALLBACK_REGIONS]
+
+        base = list(set(STATIC_SOURCES + regions))
+        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab()
+                         + fetch_bitbucket() + fetch_gitea_family()
+                         + fetch_web_search() + fetch_telegram()) - set(base))
+        sources = base + extra[:MAX_EXTRA_SOURCES]
+        logger.info(f"ВСЕГО источников: {len(sources)}")
+
+        # Парсим КАЖДЫЙ плейлист в момент прилёта и сразу выбрасываем текст
+        loaded = 0
+        ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
+        futs = [ex.submit(fetch_source_text, u) for u in sources]
+        try:
+            for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
+                try:
+                    txt = f.result()
+                except Exception:
+                    txt = None
+                if txt:
+                    loaded += 1
+                    parse_m3u(txt, entries, seen, reasons)
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы источников ({SOURCE_PHASE_MAX}с), успело: {loaded}")
+        except Exception as e:
+            logger.error(f"Ошибка фазы источников: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
+        logger.info(f"Загружено и распарсено плейлистов: {loaded}")
 
         logger.info(f"Фильтры вырезали: {dict(reasons)}")
         with cache_lock:
@@ -1019,7 +1062,7 @@ def update_cache():
             logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
         with cache_lock:
             stats['sources_total'] = len(sources)
-            stats['playlists_loaded'] = len(texts)
+            stats['playlists_loaded'] = loaded
             stats['api_streams'] = len(api_channels)
             stats['parsed_channels'] = len(raw)
         logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
@@ -1119,10 +1162,11 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">⚡ Быстрый старт • ML-приоритизация • 80+ источников • 10 категорий</div>
+<div class="sub">⚡ Быстрый старт • Нейронка с L2 • Лимиты памяти • 80+ источников</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
+<a class="btn gray" href="/memory">💾 RAM</a>
 <div class="stats">
 <div class="stat"><b>__ALIVE__</b><span>живых каналов</span></div>
 <div class="stat"><b>__PARSED__</b><span>проверено</span></div>
@@ -1156,6 +1200,18 @@ def home():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok'})
+
+@app.route('/memory')
+def memory():
+    """Сколько RSS жрёт процесс — видно до того, как Render убьёт инстанс"""
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS'):
+                    return jsonify({'rss_kb': int(line.split()[1])})
+    except Exception:
+        pass
+    return jsonify({'rss_kb': -1})
 
 @app.route('/playlist.m3u')
 @app.route('/playlist.m3u8')
