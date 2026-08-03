@@ -50,9 +50,6 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/categories/comedy.m3u",
     "https://iptv-org.github.io/iptv/categories/series.m3u",
     "https://iptv-org.github.io/iptv/categories/animation.m3u",
-    "https://iptv-org.github.io/iptv/categories/lifestyle.m3u",
-    "https://iptv-org.github.io/iptv/categories/outdoor.m3u",
-    "https://iptv-org.github.io/iptv/categories/weather.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
@@ -86,32 +83,31 @@ FALLBACK_REGIONS = [
     "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
-GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist',
-                  'topic:iptv', 'm3u8 ru', 'iptv m3u russia']
+GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv']
 GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
                    'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
 PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
 WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
-               'iptv m3u8 ru бесплатно', 'плейлист тв каналов m3u',
-               'site:t.me iptv m3u', 'iptv плейлист форум бесплатно 2026',
-               'telegram канал iptv плейлист m3u']
+               'iptv m3u8 ru бесплатно', 'site:t.me iptv m3u',
+               'iptv плейлист форум бесплатно 2026']
 TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru',
                'iptv_playlist', 'm3u_playlist', 'iptvfree', 'tv_playlist',
-               'iptv_rf', 'playlist_iptv', 'iptv_su', 'iptv_channel',
-               'free_iptv_ru', 'iptv_list', 'ru_iptv', 'iptv_tv_ru',
-               'iptv_playlists']
+               'iptv_rf', 'playlist_iptv', 'iptv_su', 'free_iptv_ru',
+               'iptv_list', 'ru_iptv', 'iptv_tv_ru']
 
 BLACKLIST_WORDS = ['fifa', 'world cup', 'чемпионат мира', 'плей-офф']
 
-# ==================== НАСТРОЙКИ ====================
+# ==================== НАСТРОЙКИ ПОД FREE-ТАРИФ ====================
 MAX_CHANNELS = 15000
-MAX_EXTRA_SOURCES = 400
-SOURCE_WORKERS = 40
-CHECK_WORKERS = 100
+MAX_EXTRA_SOURCES = 150
+MAX_CHECK_POOL = 3000
+SOURCE_WORKERS = 20
+CHECK_WORKERS = 50
 CHECK_TIMEOUT = 40.0
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 15
+HEARTBEAT_SEC = 20
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -186,7 +182,7 @@ def fetch_github():
     for q in GITHUB_QUERIES:
         try:
             r = sess.get('https://api.github.com/search/repositories',
-                         params={'q': q, 'per_page': 20, 'sort': 'stars', 'order': 'desc'},
+                         params={'q': q, 'per_page': 15, 'sort': 'stars', 'order': 'desc'},
                          headers=gh_headers, timeout=15)
             if r.status_code == 200:
                 for item in r.json().get('items', []):
@@ -196,7 +192,7 @@ def fetch_github():
                         repos.append((full, branch))
         except Exception:
             continue
-    repos = list(dict.fromkeys(repos))[:60]
+    repos = list(dict.fromkeys(repos))[:40]
     logger.info(f"GitHub: репозиториев: {len(repos)}")
 
     found = set()
@@ -212,7 +208,7 @@ def fetch_github():
             pass
         return []
 
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=15) as ex:
         for links in ex.map(read_readme, repos):
             found.update(links)
 
@@ -226,7 +222,7 @@ def fetch_gitlab():
     found = set()
     try:
         r = get_session().get('https://gitlab.com/api/v4/projects',
-                              params={'search': 'iptv', 'per_page': 20},
+                              params={'search': 'iptv', 'per_page': 15},
                               headers=HEADERS_WEB, timeout=15)
         if r.status_code == 200:
             for p in r.json():
@@ -243,7 +239,7 @@ def fetch_bitbucket():
     found = set()
     try:
         r = get_session().get('https://api.bitbucket.org/2.0/repositories',
-                              params={'q': 'name ~ "iptv"', 'pagelen': 20},
+                              params={'q': 'name ~ "iptv"', 'pagelen': 15},
                               headers=HEADERS_WEB, timeout=15)
         if r.status_code == 200:
             for v in r.json().get('values', []):
@@ -259,9 +255,9 @@ def fetch_bitbucket():
 def fetch_gitea_family():
     found = set()
     apis = [
-        ('https://codeberg.org/api/v1/repos/search?q=iptv&limit=15',
+        ('https://codeberg.org/api/v1/repos/search?q=iptv&limit=10',
          'https://codeberg.org/', '/raw/branch/'),
-        ('https://gitea.com/api/v1/repos/search?q=iptv&limit=15',
+        ('https://gitea.com/api/v1/repos/search?q=iptv&limit=10',
          'https://gitea.com/', '/raw/'),
     ]
     for url, base, rawfmt in apis:
@@ -303,7 +299,7 @@ def fetch_web_search():
         return []
 
     with ThreadPoolExecutor(max_workers=10) as ex:
-        for links in ex.map(scrape, pages[:40]):
+        for links in ex.map(scrape, pages[:25]):
             m3u.update(links)
     logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
     return list(m3u)
@@ -365,7 +361,7 @@ def fetch_source_text(url):
         pass
     return None
 
-# ==================== ФИЛЬТРЫ (без пустых строк!) ====================
+# ==================== ФИЛЬТРЫ ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
@@ -397,7 +393,7 @@ PAYWALL_WORDS = ['подписк', 'subscription', 'оплат', 'payment', 'к�
                  'ppv', 'pay per view', 'активация', 'iptv', 'fifa', 'world cup',
                  'чемпионат мира', 'плей-офф', 'плей офф', 'тариф', 'абонент',
                  'цена', 'price', 'доступ', 'access',
-                 '💳', '', '🛒', '💵', '💸', '💎', '🎁', '🔥', '⚽', '']
+                 '💳', '', '🛒', '💵', '💸', '💎', '🎁', '', '⚽', '']
 
 def is_adult(name):
     n = name.lower()
@@ -419,7 +415,6 @@ def is_russian(name):
     return bool(re.search(r'[\u0400-\u04FF]', name))
 
 def reject_reason(name):
-    """Почему канал отклонён, или None если канал годный"""
     if not is_russian(name):
         return 'not_ru'
     if is_adult(name):
@@ -502,7 +497,7 @@ def check_one(ch):
 
     return False
 
-# ==================== ПАРСЕР (со статистикой фильтров) ====================
+# ==================== ПАРСЕР ====================
 def parse_m3u(text, entries, seen_urls, reasons):
     current_inf = ''
     current_name = ''
@@ -635,6 +630,9 @@ def update_cache():
             stats['filtered'] = dict(reasons)
 
         raw = list(entries.values())
+        if len(raw) > MAX_CHECK_POOL:
+            logger.info(f"Кандидатов {len(raw)}, беру первые {MAX_CHECK_POOL}")
+            raw = raw[:MAX_CHECK_POOL]
         if not raw:
             logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
         with cache_lock:
@@ -646,9 +644,12 @@ def update_cache():
 
         alive = []
         since_flush = 0
+        checked = 0
+        last_beat = time.time()
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
             futs = {ex.submit(check_one, ch): ch for ch in raw}
             for f in as_completed(futs):
+                checked += 1
                 ch = futs[f]
                 try:
                     if f.result():
@@ -656,17 +657,19 @@ def update_cache():
                         since_flush += 1
                         if since_flush >= FLUSH_EVERY:
                             flush_playlist(alive)
-                            logger.info(f"Промежуточный флэш: {len(alive)} живых")
                             since_flush = 0
                 except Exception:
                     pass
+                if time.time() - last_beat > HEARTBEAT_SEC:
+                    logger.info(f"Прогресс проверки: {checked}/{len(raw)}, живых: {len(alive)}")
+                    last_beat = time.time()
 
         elapsed = time.time() - start
         flush_playlist(alive, elapsed=elapsed)
         logger.info(f"✅ Готово: {len(alive)} живых из {len(raw)} за {elapsed:.0f} сек")
 
     except Exception as e:
-        logger.error(f"Ошибка обновления: {e}")
+        logger.exception(f"КРИТИЧЕСКАЯ ошибка обновления: {e}")
     finally:
         is_updating = False
 
@@ -676,7 +679,7 @@ def background_worker():
         try:
             update_cache()
         except Exception as e:
-            logger.error(f"Фоновая ошибка: {e}")
+            logger.exception(f"Фоновая ошибка: {e}")
             is_updating = False
         with cache_lock:
             alive_n = stats['alive_channels']
