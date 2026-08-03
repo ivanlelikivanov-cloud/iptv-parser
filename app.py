@@ -197,9 +197,12 @@ logger = logging.getLogger(__name__)
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
-BLOCK_MARKERS = [b'roskomnadzor', b'zablokirovan', b'blocked', b'restricted',
-                 b'forbidden', b'captcha', b'cloudflare', b'access denied',
-                 b'denied', b'trebuetsya', b'оплат', b'заблокирован']
+
+# ИСПРАВЛЕНО: обычные строки (НЕ bytes!) — кириллица теперь легальна
+BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
+                 'forbidden', 'captcha', 'cloudflare', 'access denied',
+                 'denied', 'trebuetsya', 'оплат', 'заблокирован',
+                 'ограничен', 'недоступен', 'роскомнадзор']
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -270,7 +273,6 @@ class MLBrain:
             return None
 
     def score(self, feats, host):
-        """Итоговый приоритет: модель + репутация хоста + эвристики"""
         rep, cnt = self.host_stats(host)
         heur = 0.5 * feats[2] + 0.3 * feats[3] + 0.2 * (1.0 - feats[5])
         p = self.model_prob(feats)
@@ -288,7 +290,10 @@ class MLBrain:
         acc = None
         if self.model is not None:
             try:
-                preds = [1 if self.model_prob(x) and self.model_prob(x) > 0.5 else 0 for x in X[:200]]
+                preds = []
+                for x in X[:200]:
+                    p = self.model_prob(x)
+                    preds.append(1 if (p is not None and p > 0.5) else 0)
                 acc = sum(1 for p, t in zip(preds, y[:200]) if p == t) / max(1, len(preds))
             except Exception:
                 acc = None
@@ -727,7 +732,7 @@ def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
-# ==================== ПРОВЕРКА (С ДЕТЕКТОРОМ БЛОКИРОВОК) ====================
+# ==================== ПРОВЕРКА ====================
 def check_one(ch):
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -783,7 +788,12 @@ def check_one(ch):
             return True
         if b'<html' in low or b'<!doctype' in low or b'<script' in low:
             return False
-        if any(m in low for m in BLOCK_MARKERS):
+        # ИСПРАВЛЕНО: декодируем байты в строку и ищем маркеры блокировок
+        try:
+            txt_low = low.decode('utf-8', errors='ignore')
+        except Exception:
+            txt_low = ''
+        if any(m in txt_low for m in BLOCK_MARKERS):
             return False
         return True
 
