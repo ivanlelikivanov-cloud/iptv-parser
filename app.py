@@ -63,7 +63,6 @@ STATIC_SOURCES = [
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
-# ==================== ФОРУМЫ И АГРЕГАТОРЫ (бесплатные) ====================
 HTML_SOURCES = [
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
     "https://sat-portal.com/plejlisty/",
@@ -75,9 +74,6 @@ HTML_SOURCES = [
     "https://webarmen.com/my/iptv/",
     "https://go2tv.top/",
     "https://iptv.one/",
-    "https://forum.antichat.ru/forums/iptv.115/",
-    "https://4pda.to/forum/index.php?showtopic=504646",
-    "https://forum.ixbt.com/topic.cgi?id=84:21818",
 ]
 
 FALLBACK_REGIONS = [
@@ -95,30 +91,26 @@ GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist',
 GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
                    'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
 PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
-
-# ==================== ВЕБ-ПОИСК + ФОРУМЫ + TG ====================
 WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
                'iptv m3u8 ru бесплатно', 'плейлист тв каналов m3u',
                'site:t.me iptv m3u', 'iptv плейлист форум бесплатно 2026',
                'telegram канал iptv плейлист m3u']
-
-# ==================== TELEGRAM-КАНАЛЫ (публичные) ====================
 TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru',
                'iptv_playlist', 'm3u_playlist', 'iptvfree', 'tv_playlist',
                'iptv_rf', 'playlist_iptv', 'iptv_su', 'iptv_channel',
                'free_iptv_ru', 'iptv_list', 'ru_iptv', 'iptv_tv_ru',
                'iptv_playlists']
 
-# ===== СВОЙ ЧЁРНЫЙ СПИСОК (предзаполнен против рекламы подписок) =====
 BLACKLIST_WORDS = ['fifa', 'world cup', 'чемпионат мира', 'плей-офф']
 
 # ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 15000
 MAX_EXTRA_SOURCES = 400
 SOURCE_WORKERS = 40
-CHECK_WORKERS = 80
+CHECK_WORKERS = 100
 CHECK_TIMEOUT = 40.0
 UPDATE_EVERY = 86400
+RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 15
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
@@ -137,6 +129,7 @@ stats = {
     "api_streams": 0,
     "parsed_channels": 0,
     "alive_channels": 0,
+    "filtered": {},
     "categories": {},
 }
 
@@ -372,7 +365,7 @@ def fetch_source_text(url):
         pass
     return None
 
-# ==================== ФИЛЬТРЫ ====================
+# ==================== ФИЛЬТРЫ (без пустых строк!) ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
@@ -393,30 +386,30 @@ def get_category(name):
         return 'Федеральные'
     return 'Общие'
 
+ADULT_WORDS = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'nude', 'playboy']
+UA_WORDS = ['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ', 'львів', 'львов',
+            'харків', 'дніпро', 'одеса', 'суспільне', 'суспильне', 'прямий', 'тсн',
+            '1+1', '2+2', 'інтер', 'inter ua', 'верес', 'тоніс', 'тонис',
+            'ua: ', 'ua |', '| ua', ' ukraine', 'украинск']
+PAYWALL_WORDS = ['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
+                 'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
+                 'магазин', 'shop', 'store', 'premium', 'премиум', 'vip', 'вип',
+                 'ppv', 'pay per view', 'активация', 'iptv', 'fifa', 'world cup',
+                 'чемпионат мира', 'плей-офф', 'плей офф', 'тариф', 'абонент',
+                 'цена', 'price', 'доступ', 'access',
+                 '💳', '', '🛒', '💵', '💸', '💎', '🎁', '🔥', '⚽', '']
+
 def is_adult(name):
     n = name.lower()
-    bad = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'nude', 'playboy']
-    return any(w in n for w in bad)
+    return any(w in n for w in ADULT_WORDS)
 
 def is_ukrainian(name):
     n = name.lower()
-    ua = ['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ', 'львів', 'львов',
-          'харків', 'дніпро', 'одеса', 'суспільне', 'суспильне', 'прямий', 'тсн',
-          '1+1', '2+2', 'інтер', 'inter ua', 'верес', 'тоніс', 'тонис',
-          'ua: ', 'ua |', '| ua', ' ukraine', 'украинск']
-    return any(w in n for w in ua)
+    return any(w in n for w in UA_WORDS)
 
 def is_paywall(name):
-    """Реклама подписок, платные сервисы, спам"""
     n = name.lower()
-    bad = ['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
-           'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
-           'магазин', 'shop', 'store', 'premium', 'премиум', 'vip', 'вип',
-           'ppv', 'pay per view', 'активация', 'iptv', 'fifa', 'world cup',
-           'чемпионат мира', 'плей-офф', 'плей офф', 'тариф', 'абонент',
-           'цена', 'price', 'доступ', 'access',
-           '💳', '💰', '🛒', '', '💸', '', '', '🔥', '💎', '🎁']
-    if any(w in n for w in bad):
+    if any(w in n for w in PAYWALL_WORDS):
         return True
     if BLACKLIST_WORDS and any(w.lower() in n for w in BLACKLIST_WORDS):
         return True
@@ -424,6 +417,18 @@ def is_paywall(name):
 
 def is_russian(name):
     return bool(re.search(r'[\u0400-\u04FF]', name))
+
+def reject_reason(name):
+    """Почему канал отклонён, или None если канал годный"""
+    if not is_russian(name):
+        return 'not_ru'
+    if is_adult(name):
+        return 'adult'
+    if is_ukrainian(name):
+        return 'ua'
+    if is_paywall(name):
+        return 'paywall'
+    return None
 
 def norm_name(name):
     n = name.lower().strip()
@@ -434,10 +439,6 @@ def norm_name(name):
 def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
-
-def name_ok(name):
-    return (is_russian(name) and not is_adult(name)
-            and not is_ukrainian(name) and not is_paywall(name))
 
 # ==================== ПРОВЕРКА (<= 40 сек) ====================
 def check_one(ch):
@@ -501,8 +502,8 @@ def check_one(ch):
 
     return False
 
-# ==================== ПАРСЕР ====================
-def parse_m3u(text, entries, seen_urls):
+# ==================== ПАРСЕР (со статистикой фильтров) ====================
+def parse_m3u(text, entries, seen_urls, reasons):
     current_inf = ''
     current_name = ''
     for line in text.splitlines():
@@ -514,21 +515,25 @@ def parse_m3u(text, entries, seen_urls):
             m = re.search(r',\s*(.+)$', line)
             current_name = m.group(1).strip() if m else ''
         elif line.startswith('http'):
-            if current_name and name_ok(current_name) and line not in seen_urls:
-                seen_urls.add(line)
-                cat = get_category(current_name)
-                inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
-                inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
-                ch = {'inf': inf, 'url': line, 'cat': cat,
-                      'name': current_name, 'ua': '', 'ref': ''}
-                key = norm_name(current_name)
-                if key in entries:
-                    if is_hd(current_name) and not is_hd(entries[key]['name']):
+            if current_name:
+                reason = reject_reason(current_name)
+                if reason:
+                    reasons[reason] += 1
+                elif line not in seen_urls:
+                    seen_urls.add(line)
+                    cat = get_category(current_name)
+                    inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
+                    inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
+                    ch = {'inf': inf, 'url': line, 'cat': cat,
+                          'name': current_name, 'ua': '', 'ref': ''}
+                    key = norm_name(current_name)
+                    if key in entries:
+                        if is_hd(current_name) and not is_hd(entries[key]['name']):
+                            entries[key] = ch
+                    else:
                         entries[key] = ch
-                else:
-                    entries[key] = ch
-                    if len(entries) >= MAX_CHANNELS:
-                        return True
+                        if len(entries) >= MAX_CHANNELS:
+                            return True
             current_inf = ''
             current_name = ''
     return False
@@ -569,7 +574,7 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG (без UA, без подписок)...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG...")
 
     try:
         api_channels = fetch_iptv_org_api()
@@ -596,9 +601,15 @@ def update_cache():
 
         entries = {}
         seen = set()
+        reasons = Counter()
+
         for ach in api_channels:
             name = ach['name']
-            if not name or not name_ok(name):
+            if not name:
+                continue
+            reason = reject_reason(name)
+            if reason:
+                reasons[reason] += 1
                 continue
             url = ach['url']
             if url in seen:
@@ -616,16 +627,22 @@ def update_cache():
                 entries[key] = new_ch
 
         for txt in texts:
-            if parse_m3u(txt, entries, seen):
+            if parse_m3u(txt, entries, seen, reasons):
                 break
 
+        logger.info(f"Фильтры вырезали: {dict(reasons)}")
+        with cache_lock:
+            stats['filtered'] = dict(reasons)
+
         raw = list(entries.values())
+        if not raw:
+            logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
         with cache_lock:
             stats['sources_total'] = len(sources)
             stats['playlists_loaded'] = len(texts)
             stats['api_streams'] = len(api_channels)
             stats['parsed_channels'] = len(raw)
-        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек)...")
+        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
 
         alive = []
         since_flush = 0
@@ -661,7 +678,11 @@ def background_worker():
         except Exception as e:
             logger.error(f"Фоновая ошибка: {e}")
             is_updating = False
-        time.sleep(UPDATE_EVERY)
+        with cache_lock:
+            alive_n = stats['alive_channels']
+        wait = UPDATE_EVERY if alive_n > 0 else RETRY_IF_EMPTY
+        logger.info(f"Следующая попытка через {wait // 60} мин")
+        time.sleep(wait)
 
 threading.Thread(target=background_worker, daemon=True).start()
 
