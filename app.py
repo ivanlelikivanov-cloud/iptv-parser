@@ -15,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# ==================== СТАТИКА (расширена) ====================
+# ==================== СТАТИКА ====================
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
@@ -92,15 +92,16 @@ WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv pl
                'iptv m3u8 ru бесплатно', 'плейлист тв каналов m3u']
 TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru']
 
-# ===== СВОЙ ЧЁРНЫЙ СПИСОК: впиши слова из названий каналов-подписок =====
 BLACKLIST_WORDS = []
 
 # ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 15000
-SOURCE_WORKERS = 25
+MAX_EXTRA_SOURCES = 400
+SOURCE_WORKERS = 40
 CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
 UPDATE_EVERY = 86400
+FLUSH_EVERY = 15
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -321,7 +322,7 @@ def fetch_iptv_org_api():
             if ch.get('is_nsfw'):
                 continue
             if ch.get('country') == 'UA':
-                continue  # украинские каналы не нужны
+                continue
             langs = []
             for lng in (ch.get('languages') or []):
                 langs.append(lng.get('code') if isinstance(lng, dict) else lng)
@@ -344,15 +345,12 @@ def fetch_iptv_org_api():
         return []
 
 def fetch_source_text(url):
-    for _ in range(2):
-        try:
-            r = get_session().get(url, timeout=20, headers=HEADERS_WEB, verify=False)
-            if r.status_code == 200 and r.text:
-                return r.text
-            if r.status_code in (404, 410):
-                return None
-        except Exception:
-            continue
+    try:
+        r = get_session().get(url, timeout=15, headers=HEADERS_WEB, verify=False)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        pass
     return None
 
 # ==================== ФИЛЬТРЫ ====================
@@ -390,7 +388,6 @@ def is_ukrainian(name):
     return any(w in n for w in ua)
 
 def is_paywall(name):
-    """Каналы-подписки, реклама платных сервисов, магазины"""
     n = name.lower()
     bad = ['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
            'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
@@ -513,6 +510,35 @@ def parse_m3u(text, entries, seen_urls):
             current_name = ''
     return False
 
+# ==================== СБОРКА ПЛЕЙЛИСТА (постепенная) ====================
+def flush_playlist(alive, elapsed=None):
+    global playlist_cache
+
+    def sort_key(ch):
+        try:
+            i = CAT_ORDER.index(ch['cat'])
+        except ValueError:
+            i = len(CAT_ORDER)
+        return (i, ch['name'].lower())
+
+    alive_sorted = sorted(alive, key=sort_key)
+    cat_counts = Counter(ch['cat'] for ch in alive_sorted)
+    lines = [
+        '#EXTM3U',
+        '# IPTV Russia Pro MAX | ' + time.strftime('%Y-%m-%d %H:%M'),
+        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без подписок',
+    ]
+    for ch in alive_sorted:
+        lines.append(ch['inf'])
+        lines.append(ch['url'])
+    with cache_lock:
+        playlist_cache = '\n'.join(lines)
+        stats['alive_channels'] = len(alive_sorted)
+        stats['categories'] = dict(cat_counts)
+        if elapsed is not None:
+            stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            stats['duration_sec'] = round(elapsed, 1)
+
 # ==================== ОБНОВЛЕНИЕ ====================
 def update_cache():
     global playlist_cache, is_updating
@@ -531,9 +557,11 @@ def update_cache():
             regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u'
                        for r in FALLBACK_REGIONS]
 
-        sources = list(set(STATIC_SOURCES + regions + fetch_dynamic() + fetch_github()
-                           + fetch_gitlab() + fetch_bitbucket() + fetch_gitea_family()
-                           + fetch_web_search() + fetch_telegram()))
+        base = list(set(STATIC_SOURCES + regions))
+        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab()
+                         + fetch_bitbucket() + fetch_gitea_family()
+                         + fetch_web_search() + fetch_telegram()) - set(base))
+        sources = base + extra[:MAX_EXTRA_SOURCES]
         logger.info(f"ВСЕГО источников: {len(sources)}")
 
         texts = []
@@ -569,9 +597,16 @@ def update_cache():
                 break
 
         raw = list(entries.values())
-        logger.info(f"Уникальных каналов (после фильтров): {len(raw)}. Проверка (<= 40 сек)...")
+        with cache_lock:
+            stats['sources_total'] = len(sources)
+            stats['playlists_loaded'] = len(texts)
+            stats['api_streams'] = len(api_channels)
+            stats['parsed_channels'] = len(raw)
+        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек)...")
 
+        # Проверка с ПОСТЕПЕННЫМ наполнением плейлиста
         alive = []
+        since_flush = 0
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
             futs = {ex.submit(check_one, ch): ch for ch in raw}
             for f in as_completed(futs):
@@ -579,41 +614,16 @@ def update_cache():
                 try:
                     if f.result():
                         alive.append(ch)
+                        since_flush += 1
+                        if since_flush >= FLUSH_EVERY:
+                            flush_playlist(alive)
+                            logger.info(f"Промежуточный флэш: {len(alive)} живых")
+                            since_flush = 0
                 except Exception:
                     pass
 
-        def sort_key(ch):
-            try:
-                i = CAT_ORDER.index(ch['cat'])
-            except ValueError:
-                i = len(CAT_ORDER)
-            return (i, ch['name'].lower())
-
-        alive.sort(key=sort_key)
-        cat_counts = Counter(ch['cat'] for ch in alive)
-
-        lines = [
-            '#EXTM3U',
-            '# IPTV Russia Pro MAX | ' + time.strftime('%Y-%m-%d %H:%M'),
-            '# Живых каналов: ' + str(len(alive)) + ' | без 18+ | без UA | без подписок',
-        ]
-        for ch in alive:
-            lines.append(ch['inf'])
-            lines.append(ch['url'])
-
         elapsed = time.time() - start
-        with cache_lock:
-            playlist_cache = '\n'.join(lines)
-            stats.update({
-                'last_update': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'duration_sec': round(elapsed, 1),
-                'sources_total': len(sources),
-                'playlists_loaded': len(texts),
-                'api_streams': len(api_channels),
-                'parsed_channels': len(raw),
-                'alive_channels': len(alive),
-                'categories': dict(cat_counts),
-            })
+        flush_playlist(alive, elapsed=elapsed)
         logger.info(f"✅ Готово: {len(alive)} живых из {len(raw)} за {elapsed:.0f} сек")
 
     except Exception as e:
@@ -633,13 +643,14 @@ def background_worker():
 
 threading.Thread(target=background_worker, daemon=True).start()
 
-# ==================== ВЕБ (404 невозможен) ====================
+# ==================== ВЕБ ====================
 def make_playlist_response():
     with cache_lock:
         data = playlist_cache
     resp = Response(data, mimetype='application/vnd.apple.mpegurl')
     resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
-    resp.headers['Cache-Control'] = 'public, max-age=3600'
+    has_channels = '\nhttp' in data
+    resp.headers['Cache-Control'] = 'public, max-age=3600' if has_channels else 'no-store'
     return resp
 
 HOME_TEMPLATE = """<!DOCTYPE html>
@@ -660,7 +671,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">Без 18+ • Без UA • Без каналов-подписок • 8 платформ-источников</div>
+<div class="sub">Без 18+ • Без UA • Без подписок • 8 платформ-источников</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
