@@ -15,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# ==================== СТАТИКА (РАСШИРЕНА) ====================
+# ==================== СТАТИКА ====================
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
@@ -47,11 +47,11 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/de.m3u",
     "https://iptv-org.github.io/iptv/countries/us.m3u",
     "https://iptv-org.github.io/iptv/index.m3u",
-    # Дополнительные категории iptv-org
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
     "https://iptv-org.github.io/iptv/categories/kids.m3u",
+    "https://iptv-org.github.io/iptv/categories/music.m3u",
     "https://iptv-org.github.io/iptv/categories/documentary.m3u",
     "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
     "https://iptv-org.github.io/iptv/categories/general.m3u",
@@ -71,7 +71,6 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/categories/business.m3u",
     "https://iptv-org.github.io/iptv/categories/relax.m3u",
     "https://iptv-org.github.io/iptv/categories/science.m3u",
-    # Сторонние стабильные плейлисты
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/index.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
@@ -81,15 +80,17 @@ STATIC_SOURCES = [
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
     "https://raw.githubusercontent.com/smolnp/IPTVru/main/IPTVru.m3u",
     "https://smolnp.github.io/IPTVru/IPTVru.m3u",
+    "http://iptv-list.mart.ru/playlist.m3u",
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
-    "https://webarmen.com/webarmen/my/iptv/auto.m3u",
+    "https://webarmen.com/my/iptv/auto.m3u",
 ]
 
 # ==================== АГРЕГАТОРЫ И ФОРУМЫ ====================
 HTML_SOURCES = [
     "https://m3u.su/",
+    "https://m3u.su/m3u/",
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
     "https://sat-portal.com/plejlisty/",
     "https://6x6.msk.ru/",
@@ -106,6 +107,7 @@ HTML_SOURCES = [
     "https://iptv-live.ru/",
     "https://iptv-tv.ru/",
     "https://iptv-russia.online/",
+    "https://vse-tv.net/",
     "https://vse-tv.net/playlists.html",
     "https://forumtv.org/",
     "https://webos-forums.ru/post167674.html",
@@ -115,6 +117,8 @@ HTML_SOURCES = [
     "https://github.com/4mirror/iptv",
     "https://github.com/hmlendea/iptv-playlist-aggregator",
     "https://pskovline.tv/tvm3u.php",
+    "https://onlinetv.ru/",
+    "https://smotret-tv.online/",
 ]
 
 FALLBACK_REGIONS = [
@@ -127,7 +131,7 @@ FALLBACK_REGIONS = [
     "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
-GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv']
+GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv', 'iptv m3u8 ru']
 GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
                    'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
 PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
@@ -156,8 +160,8 @@ KEEPALIVE_SEC = 300
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
-CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт',
-             'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 'Общие']
+CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
+             'Музыка', 'Познавательные', 'Развлекательные', 'Региональные', 'Общие']
 
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro — идёт первая проверка каналов...\n"
 cache_lock = threading.Lock()
@@ -227,7 +231,7 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== ФИЛЬТРЫ И СЛОВАРИ ====================
+# ==================== СЛОВАРИ ФИЛЬТРОВ ====================
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -238,7 +242,7 @@ UA_WORDS = _clean(['україн', 'украина', 'україна', 'kyiv', '
                    'львів', 'львов', 'харків', 'дніпро', 'одеса', 'суспільне',
                    'суспильне', 'прямий', 'тсн', '1+1', '2+2', 'інтер',
                    'inter ua', 'верес', 'тоніс', 'тонис', 'ua: ', 'ua |',
-                   '| ua', ' ukraine', 'украинск'])
+                   '| ua', ' ukraine', 'украинск', '5 kanal'])
 
 PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment', 'купить',
                         'продаж', 'whatsapp', 'telegram', 't.me', 'promo',
@@ -250,14 +254,22 @@ PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment
 
 BLACKLIST_WORDS = _clean(['fifa', 'world cup', 'чемпионат мира', 'плей-офф'])
 
-# Дополнительный строгий блок для исключения радиостанций
 RADIO_WORDS = _clean([
-    'радио', 'radio', 'fm', 'ржд', 'дорожное радио', 'авторадио', 'ретро fm',
-    'еуропа плюс', 'europa plus', 'шансон', 'москва fm', 'комсомольская правда',
-    'dfm', 'monte carlo', 'maximum', 'record', 'радио рекорд', 'energy',
-    'радио энергия', 'relax fm', 'детское радио', 'юмор fm', 'كوم', 'azadliq',
-    'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant', 'kommersant fm'
-])
+    'радио', 'radio', 'fm', 'ржд', 'дорожное', 'авторадио', 'ретро fm',
+    'europa plus', 'европа плюс', 'шансон', 'dfm', 'monte carlo', 'maximum',
+    'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
+    'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm'])
+
+# Латинские/цифровые имена российских и русскоязычных каналов
+LATIN_RU_WORDS = _clean([
+    'rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pervy', 'channel one',
+    'match tv', 'match!', 'zvezda', 'karusel', 'carousel', 'muz-tv', 'muz tv',
+    'ru.tv', 'rutv', 'tv1000', 'tv 1000', 'ren tv', 'ntv', 'sts', 'tnt',
+    'rossiya', 'rossia', 'russia', 'vesti', 'izvestia', 'kultura', 'soyuz',
+    'spas', 'domashniy', 'pyatnitsa', 'subbota', 'mir tv', 'otr', 'tv centr',
+    'tv center', 'telekanal', '360', '8 kanal', 'shanson tv', 'retro tv',
+    'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
+    'kinopoisk', 'illuzion', 'r1', 'r24'])
 
 # ==================== РАЗВЕДКА ====================
 def fetch_dynamic():
@@ -304,6 +316,7 @@ def fetch_github():
         except Exception:
             continue
     repos = list(dict.fromkeys(repos))[:40]
+    logger.info(f"GitHub: репозиториев: {len(repos)}")
 
     found = set()
 
@@ -411,6 +424,7 @@ def fetch_web_search():
     with ThreadPoolExecutor(max_workers=10) as ex:
         for links in ex.map(scrape, pages[:25]):
             m3u.update(links)
+    logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
     return list(m3u)
 
 def fetch_telegram():
@@ -422,6 +436,7 @@ def fetch_telegram():
                 found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
         except Exception:
             continue
+    logger.info(f"Telegram: ссылок: {len(found)}")
     return list(found)
 
 def fetch_iptv_org_api():
@@ -439,7 +454,6 @@ def fetch_iptv_org_api():
                 continue
             if ch.get('country') == 'UA':
                 continue
-            # Исключаем радио через поле категории в самом API, если она там есть
             if ch.get('category') == 'radio':
                 continue
             langs = []
@@ -472,28 +486,30 @@ def fetch_source_text(url):
         pass
     return None
 
-# ==================== ФИЛЬТРАЦИЯ С УЧЕТОМ РАДИО ====================
+# ==================== КАТЕГОРИИ (НОРМАЛЬНЫЕ) ====================
 def get_category(name):
     n = name.lower()
-    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby']):
         return 'Детские'
-    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn']):
+    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
         return 'Новости'
-    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт']):
+    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
         return 'Спорт'
-    if any(w in n for w in ['кино', 'movie', 'film', 'фильм', 'сериал', 'series', 'cinema', 'tv1000', 'амедиа', 'дом кино']):
+    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьера', 'боевик', 'детектив', 'мелодрама', 'комедия', 'ужас', 'фантастика', 'наш детектив', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
         return 'Кино и сериалы'
-    # Категорию Музыка оставляем для музыкальных ТВ-каналов (типа MTV, Bridge TV), а радио отсеивается на этапе reject_reason
-    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон тв', 'рутв', 'ru.tv']):
+    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'zeli', 'жара', 'лирика', 'блюз', 'jazz', 'rock', 'классик', 'classic', 'euromusic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз']):
         return 'Музыка'
-    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'культур', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз']):
+    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'кухн', 'еда', 'food', 'здоров', 'health', 'медицин', 'doctor', 'научпоп']):
         return 'Познавательные'
-    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'кухн', 'еда', 'food', 'мода']):
+    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот', 'кавээн', 'юморист']):
         return 'Развлекательные'
-    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2']):
+    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'обл-тв', 'городской']):
+        return 'Региональные'
+    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
         return 'Федеральные'
     return 'Общие'
 
+# ==================== ФИЛЬТРЫ ====================
 def is_adult(name):
     n = name.lower()
     return any(w in n for w in ADULT_WORDS)
@@ -512,19 +528,21 @@ def is_paywall(name):
 
 def is_radio(name):
     n = name.lower()
-    # Проверяем на вхождение ключевых слов радио
     if any(w in n for w in RADIO_WORDS):
         return True
-    # Дополнительно отсекаем потоки, где явно написано "радио" или "fm" (как отдельное слово)
     if re.search(r'\bfm\b', n) or 'радиостанция' in n:
         return True
     return False
 
-def is_russian(name):
-    return bool(re.search(r'[\u0400-\u04FF]', name))
+def is_russian_like(name):
+    """Кириллица ИЛИ латинские/цифровые имена российских каналов"""
+    if re.search(r'[\u0400-\u04FF]', name):
+        return True
+    n = name.lower()
+    return any(w in n for w in LATIN_RU_WORDS)
 
 def reject_reason(name):
-    if not is_russian(name):
+    if not is_russian_like(name):
         return 'not_ru'
     if is_adult(name):
         return 'adult'
@@ -680,11 +698,11 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG (без радио)...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG...")
 
     try:
         api_channels = fetch_iptv_org_api()
-        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/Радио): {len(api_channels)}")
+        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/радио): {len(api_channels)}")
 
         regions = fetch_ru_regions()
         if not regions:
@@ -829,8 +847,8 @@ h1{margin:0 0 8px;font-size:32px}
 .stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷🇺 IPTV Russia Pro MAX</h1>
-<div class="sub">70+ источников • Форумы + TG + 8 платформ • Без радиостанций</div>
+<h1>🇷 IPTV Russia Pro MAX</h1>
+<div class="sub">80+ источников • 10 категорий • Без радио/18+/UA/подписок</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
