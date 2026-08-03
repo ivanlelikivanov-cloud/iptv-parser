@@ -2,3 +2,4 @@ flask
 requests
 waitress
 urllib3
+scikit-learn
