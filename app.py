@@ -34,10 +34,11 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ge.m3u",
     "https://iptv-org.github.io/iptv/countries/md.m3u",
     "https://iptv-org.github.io/iptv/countries/tj.m3u",
-    # Диаспора: русскоязычные каналы за рубежом
     "https://iptv-org.github.io/iptv/countries/il.m3u",
     "https://iptv-org.github.io/iptv/countries/de.m3u",
     "https://iptv-org.github.io/iptv/countries/us.m3u",
+    # ГЛОБАЛЬНЫЙ ИНДЕКС: все каналы мира, кириллица отфильтрует русские
+    "https://iptv-org.github.io/iptv/index.m3u",
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
@@ -65,17 +66,23 @@ STATIC_SOURCES = [
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
+# ==================== АГРЕГАТОРЫ И ФОРУМЫ (типа m3u.su) ====================
 HTML_SOURCES = [
+    "https://m3u.su/",
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
     "https://sat-portal.com/plejlisty/",
     "https://6x6.msk.ru/",
     "https://homtv.ru/",
     "https://iptv-rus.com/",
     "https://pikniktv.info/viewtopic.php?t=6737",
-    "https://m3u.su/",
     "https://webarmen.com/my/iptv/",
     "https://go2tv.top/",
     "https://iptv.one/",
+    "https://iptv.best/",
+    "https://iptv-channels.net/",
+    "https://iptv-live.ru/",
+    "https://iptv-tv.ru/",
+    "https://iptv-russia.online/",
 ]
 
 FALLBACK_REGIONS = [
@@ -100,7 +107,7 @@ TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru
                'iptv_rf', 'playlist_iptv', 'iptv_su', 'free_iptv_ru',
                'iptv_list', 'ru_iptv', 'iptv_tv_ru']
 
-# ==================== НАСТРОЙКИ (БОЛЬШЕ КАНАЛОВ) ====================
+# ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 20000
 MAX_EXTRA_SOURCES = 150
 MAX_CHECK_POOL = 5000
@@ -111,6 +118,7 @@ UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 15
 HEARTBEAT_SEC = 20
+KEEPALIVE_SEC = 300
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -139,6 +147,43 @@ HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
 
+# ==================== ДИСКОВЫЙ КЭШ (анти-сброс в 0) ====================
+CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'playlist_disk.m3u')
+
+def load_disk_cache():
+    global playlist_cache
+    try:
+        if os.path.exists(CACHE_FILE):
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = f.read()
+            n = data.count('\nhttp')
+            if n > 0:
+                with cache_lock:
+                    playlist_cache = data
+                    stats['alive_channels'] = n
+                logger.info(f"💾 Восстановлен плейлист с диска: {n} каналов")
+    except Exception as e:
+        logger.error(f"Дисковый кэш не читается: {e}")
+
+def save_disk_cache(data):
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            f.write(data)
+    except Exception:
+        pass
+
+# ==================== KEEPALIVE (не даёт Render усыпить инстанс) ====================
+SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
+
+def keepalive_worker():
+    while True:
+        time.sleep(KEEPALIVE_SEC)
+        try:
+            requests.get(SELF_URL + '/health', timeout=10)
+            logger.debug("keepalive ping ok")
+        except Exception:
+            pass
+
 _thread_local = threading.local()
 
 def get_session():
@@ -151,7 +196,7 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== ФИЛЬТРЫ (ТОЛЬКО ТЕКСТ + ПРЕДОХРАНИТЕЛЬ) ====================
+# ==================== ФИЛЬТРЫ ====================
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -448,7 +493,7 @@ def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
-# ==================== ПРОВЕРКА (<= 40 сек, мягче к контенту) ====================
+# ==================== ПРОВЕРКА ====================
 def check_one(ch):
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -502,10 +547,8 @@ def check_one(ch):
         low = chunk[:300].lower()
         if b'#extm3u' in low or b'#extinf' in low:
             return True
-        # HTML-заглушки провайдеров — в мусорку
         if b'<html' in low or b'<!doctype' in low or b'access denied' in low or b'<script' in low:
             return False
-        # Любые другие данные (даже без заголовков) — канал живой
         return True
 
     return False
@@ -546,7 +589,7 @@ def parse_m3u(text, entries, seen_urls, reasons):
             current_name = ''
     return False
 
-# ==================== ПОСТЕПЕННАЯ СБОРКА ====================
+# ==================== СБОРКА + ДИСК ====================
 def flush_playlist(alive, elapsed=None):
     global playlist_cache
 
@@ -567,13 +610,15 @@ def flush_playlist(alive, elapsed=None):
     for ch in alive_sorted:
         lines.append(ch['inf'])
         lines.append(ch['url'])
+    data = '\n'.join(lines)
     with cache_lock:
-        playlist_cache = '\n'.join(lines)
+        playlist_cache = data
         stats['alive_channels'] = len(alive_sorted)
         stats['categories'] = dict(cat_counts)
         if elapsed is not None:
             stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
             stats['duration_sec'] = round(elapsed, 1)
+    save_disk_cache(data)
 
 # ==================== ОБНОВЛЕНИЕ ====================
 def update_cache():
@@ -700,7 +745,10 @@ def background_worker():
         logger.info(f"Следующая попытка через {wait // 60} мин")
         time.sleep(wait)
 
+# Восстанавливаем плейлист с диска ДО старта потоков
+load_disk_cache()
 threading.Thread(target=background_worker, daemon=True).start()
+threading.Thread(target=keepalive_worker, daemon=True).start()
 
 # ==================== ВЕБ ====================
 def make_playlist_response():
@@ -730,7 +778,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">Форумы + TG + 8 платформ • Без 18+ • Без UA • Без подписок</div>
+<div class="sub">Форумы + TG + 8 платформ • Дисковый кэш • Keepalive</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
