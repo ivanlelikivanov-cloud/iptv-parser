@@ -148,7 +148,7 @@ TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru
                'iptv_2026', 'm3u8ru', 'iptv_playlist_ru', 'tv_m3u', 'iptvhub_ru']
 
 # ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 12000          # снижено: экономия RAM
+MAX_CHANNELS = 12000
 MAX_EXTRA_SOURCES = 200
 MAX_CHECK_POOL = 5000
 SOURCE_WORKERS = 15
@@ -162,8 +162,8 @@ RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 10
 HEARTBEAT_SEC = 20
 KEEPALIVE_SEC = 60
-MAX_PLAYLIST_BYTES = 2_000_000   # 2 МБ на плейлист
-MAX_HTML_BYTES = 524_288         # 512 КБ на HTML-страницу
+MAX_PLAYLIST_BYTES = 2_000_000
+MAX_HTML_BYTES = 524_288
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -205,7 +205,7 @@ CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
 DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
 MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
 
-# ==================== НЕЙРОНКА С L2-РЕГУЛЯРИЗАЦИЕЙ ====================
+# ==================== НЕЙРОНКА С L2 ====================
 def _sig(z):
     if z >= 0:
         return 1.0 / (1.0 + math.exp(-z))
@@ -222,7 +222,6 @@ class TinyLR:
         return _sig(z)
 
     def partial_fit(self, X, y, lr=0.3, epochs=2, l2=0.001):
-        """SGD + L2-штраф: не даём весам раздуваться на 1-2 признаках"""
         for _ in range(epochs):
             for x, t in zip(X, y):
                 e = self.prob(x) - t
@@ -230,7 +229,6 @@ class TinyLR:
                     self.w[i] = self.w[i] * (1.0 - l2) - lr * e * xi
                 self.b -= lr * e
 
-# ==================== ML-МОЗГ (потокобезопасный) ====================
 class MLBrain:
     def __init__(self):
         self.host_alive = {}
@@ -239,7 +237,7 @@ class MLBrain:
         self.trained_samples = 0
         self.last_accuracy = 0.0
         self.db = None
-        self.lock = threading.RLock()   # RLock: можно вкладываться
+        self.lock = threading.RLock()
         try:
             self.db = sqlite3.connect(DB_FILE, check_same_thread=False)
             with self.lock:
@@ -271,7 +269,7 @@ class MLBrain:
         return (a + 1.0) / (t + 2.0), t
 
     def record(self, host, alive):
-        with self.lock:   # вся мутация памяти под замком — гонки исключены
+        with self.lock:
             self.host_total[host] = self.host_total.get(host, 0) + 1
             self.host_alive[host] = self.host_alive.get(host, 0) + (1 if alive else 0)
         if self.db is None:
@@ -407,7 +405,7 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== СЛОВАРИ ФИЛЬТРОВ ====================
+# ==================== СЛОВАРИ ====================
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -446,7 +444,7 @@ LATIN_RU_WORDS = _clean([
     'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
     'kinopoisk', 'illuzion'])
 
-# ==================== РАЗВЕДКА (С ЛИМИТАМИ ПАМЯТИ) ====================
+# ==================== РАЗВЕДКА ====================
 def _read_capped(resp, cap):
     chunks = []
     total = 0
@@ -693,7 +691,6 @@ def fetch_iptv_org_api():
         return []
 
 def fetch_source_text(url):
-    """Поточное чтение с лимитом 2 МБ — гигантские листы не съедают RAM"""
     try:
         r = get_session().get(url, timeout=(5, 10), headers=HEADERS_WEB,
                               verify=False, stream=True)
@@ -884,7 +881,7 @@ def parse_m3u(text, entries, seen_urls, reasons):
             current_name = ''
     return False
 
-# ==================== СБОРКА + ДИСК ====================
+# ==================== СБОРКА (НИКОГДА НЕ ПИШЕТ ПУСТОТУ) ====================
 def flush_playlist(alive, elapsed=None):
     global playlist_cache
 
@@ -896,6 +893,9 @@ def flush_playlist(alive, elapsed=None):
         return (i, ch['name'].lower())
 
     alive_sorted = sorted(alive, key=sort_key)
+    if not alive_sorted:
+        # 🚫 ЗАПРЕТ ПУСТОТЫ: не затираем хороший плейлист пустым
+        return
     cat_counts = Counter(ch['cat'] for ch in alive_sorted)
     lines = [
         '#EXTM3U',
@@ -915,7 +915,7 @@ def flush_playlist(alive, elapsed=None):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
-# ==================== ⚡ БЫСТРЫЙ СТАРТ ====================
+# ==================== ⚡ БЫСТРЫЙ СТАРТ (возвращает список живых) ====================
 def quick_seed():
     logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
     seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
@@ -938,7 +938,7 @@ def quick_seed():
     raw = list(entries.values())[:1000]
     if not raw:
         logger.warning("⚡ Стартовый набор пуст, ждём большой прогон")
-        return 0
+        return []
 
     alive = []
     ex = ThreadPoolExecutor(max_workers=40)
@@ -964,9 +964,9 @@ def quick_seed():
     if alive:
         flush_playlist(alive)
         logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
-    return len(alive)
+    return alive
 
-# ==================== ОБНОВЛЕНИЕ (ПАРСИМ НА ЛЕТУ, БЕЗ СКЛАДА ТЕКСТОВ) ====================
+# ==================== ОБНОВЛЕНИЕ ====================
 def update_cache():
     global playlist_cache, is_updating
     if is_updating:
@@ -976,7 +976,10 @@ def update_cache():
     logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG + ML-приоритизация...")
 
     try:
-        quick_seed()
+        # ⚡ Сид вливается в большой прогон: плейлист больше не может схлопнуться
+        seed_alive = quick_seed()
+        alive = list(seed_alive)
+        alive_urls = set(ch['url'] for ch in alive)
 
         entries = {}
         seen = set()
@@ -1019,7 +1022,6 @@ def update_cache():
         sources = base + extra[:MAX_EXTRA_SOURCES]
         logger.info(f"ВСЕГО источников: {len(sources)}")
 
-        # Парсим КАЖДЫЙ плейлист в момент прилёта и сразу выбрасываем текст
         loaded = 0
         ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
         futs = [ex.submit(fetch_source_text, u) for u in sources]
@@ -1067,7 +1069,6 @@ def update_cache():
             stats['parsed_channels'] = len(raw)
         logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
 
-        alive = []
         samples = []
         since_flush = 0
         checked = 0
@@ -1082,7 +1083,8 @@ def update_cache():
                     ok = bool(f.result())
                 except Exception:
                     ok = False
-                if ok:
+                if ok and ch['url'] not in alive_urls:
+                    alive_urls.add(ch['url'])
                     alive.append(ch)
                     since_flush += 1
                     if since_flush >= FLUSH_EVERY:
@@ -1162,7 +1164,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">⚡ Быстрый старт • Нейронка с L2 • Лимиты памяти • 80+ источников</div>
+<div class="sub">⚡ Быстрый старт • Нейронка • Защита от исчезновения каналов</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
@@ -1203,7 +1205,6 @@ def health():
 
 @app.route('/memory')
 def memory():
-    """Сколько RSS жрёт процесс — видно до того, как Render убьёт инстанс"""
     try:
         with open('/proc/self/status') as f:
             for line in f:
