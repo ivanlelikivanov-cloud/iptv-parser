@@ -63,14 +63,21 @@ STATIC_SOURCES = [
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
 ]
 
+# ==================== ФОРУМЫ И АГРЕГАТОРЫ (бесплатные) ====================
 HTML_SOURCES = [
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
+    "https://sat-portal.com/plejlisty/",
     "https://6x6.msk.ru/",
     "https://homtv.ru/",
     "https://iptv-rus.com/",
     "https://pikniktv.info/viewtopic.php?t=6737",
     "https://m3u.su/",
     "https://webarmen.com/my/iptv/",
+    "https://go2tv.top/",
+    "https://iptv.one/",
+    "https://forum.antichat.ru/forums/iptv.115/",
+    "https://4pda.to/forum/index.php?showtopic=504646",
+    "https://forum.ixbt.com/topic.cgi?id=84:21818",
 ]
 
 FALLBACK_REGIONS = [
@@ -88,11 +95,22 @@ GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist',
 GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
                    'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
 PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
-WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
-               'iptv m3u8 ru бесплатно', 'плейлист тв каналов m3u']
-TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru']
 
-BLACKLIST_WORDS = []
+# ==================== ВЕБ-ПОИСК + ФОРУМЫ + TG ====================
+WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
+               'iptv m3u8 ru бесплатно', 'плейлист тв каналов m3u',
+               'site:t.me iptv m3u', 'iptv плейлист форум бесплатно 2026',
+               'telegram канал iptv плейлист m3u']
+
+# ==================== TELEGRAM-КАНАЛЫ (публичные) ====================
+TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru',
+               'iptv_playlist', 'm3u_playlist', 'iptvfree', 'tv_playlist',
+               'iptv_rf', 'playlist_iptv', 'iptv_su', 'iptv_channel',
+               'free_iptv_ru', 'iptv_list', 'ru_iptv', 'iptv_tv_ru',
+               'iptv_playlists']
+
+# ===== СВОЙ ЧЁРНЫЙ СПИСОК (предзаполнен против рекламы подписок) =====
+BLACKLIST_WORDS = ['fifa', 'world cup', 'чемпионат мира', 'плей-офф']
 
 # ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 15000
@@ -292,7 +310,7 @@ def fetch_web_search():
         return []
 
     with ThreadPoolExecutor(max_workers=10) as ex:
-        for links in ex.map(scrape, pages[:30]):
+        for links in ex.map(scrape, pages[:40]):
             m3u.update(links)
     logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
     return list(m3u)
@@ -306,6 +324,7 @@ def fetch_telegram():
                 found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
         except Exception:
             continue
+    logger.info(f"Telegram: ссылок: {len(found)}")
     return list(found)
 
 def fetch_iptv_org_api():
@@ -388,11 +407,15 @@ def is_ukrainian(name):
     return any(w in n for w in ua)
 
 def is_paywall(name):
+    """Реклама подписок, платные сервисы, спам"""
     n = name.lower()
     bad = ['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
            'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
            'магазин', 'shop', 'store', 'premium', 'премиум', 'vip', 'вип',
-           'ppv', 'pay per view', 'активация', '💳', '💰', '🛒', '💵', '💸']
+           'ppv', 'pay per view', 'активация', 'iptv', 'fifa', 'world cup',
+           'чемпионат мира', 'плей-офф', 'плей офф', 'тариф', 'абонент',
+           'цена', 'price', 'доступ', 'access',
+           '💳', '💰', '🛒', '', '💸', '', '', '🔥', '💎', '🎁']
     if any(w in n for w in bad):
         return True
     if BLACKLIST_WORDS and any(w.lower() in n for w in BLACKLIST_WORDS):
@@ -510,7 +533,7 @@ def parse_m3u(text, entries, seen_urls):
             current_name = ''
     return False
 
-# ==================== СБОРКА ПЛЕЙЛИСТА (постепенная) ====================
+# ==================== ПОСТЕПЕННАЯ СБОРКА ====================
 def flush_playlist(alive, elapsed=None):
     global playlist_cache
 
@@ -546,7 +569,7 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ (без UA, без подписок)...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG (без UA, без подписок)...")
 
     try:
         api_channels = fetch_iptv_org_api()
@@ -604,7 +627,6 @@ def update_cache():
             stats['parsed_channels'] = len(raw)
         logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек)...")
 
-        # Проверка с ПОСТЕПЕННЫМ наполнением плейлиста
         alive = []
         since_flush = 0
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
@@ -671,7 +693,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">Без 18+ • Без UA • Без подписок • 8 платформ-источников</div>
+<div class="sub">Форумы + TG + 8 платформ • Без 18+ • Без UA • Без подписок</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
