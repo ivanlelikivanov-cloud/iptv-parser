@@ -87,7 +87,6 @@ STATIC_SOURCES = [
     "https://webarmen.com/my/iptv/auto.m3u",
 ]
 
-# ==================== АГРЕГАТОРЫ И ФОРУМЫ ====================
 HTML_SOURCES = [
     "https://m3u.su/",
     "https://m3u.su/m3u/",
@@ -152,6 +151,8 @@ MAX_CHECK_POOL = 5000
 SOURCE_WORKERS = 20
 CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
+SOURCE_PHASE_MAX = 240     # максимум 4 минуты на загрузку источников
+CHECK_PHASE_MAX = 1500     # максимум 25 минут на проверку
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 15
@@ -231,7 +232,6 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== СЛОВАРИ ФИЛЬТРОВ ====================
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -260,7 +260,6 @@ RADIO_WORDS = _clean([
     'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
     'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm'])
 
-# Латинские/цифровые имена российских и русскоязычных каналов
 LATIN_RU_WORDS = _clean([
     'rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pervy', 'channel one',
     'match tv', 'match!', 'zvezda', 'karusel', 'carousel', 'muz-tv', 'muz tv',
@@ -269,14 +268,14 @@ LATIN_RU_WORDS = _clean([
     'spas', 'domashniy', 'pyatnitsa', 'subbota', 'mir tv', 'otr', 'tv centr',
     'tv center', 'telekanal', '360', '8 kanal', 'shanson tv', 'retro tv',
     'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
-    'kinopoisk', 'illuzion', 'r1', 'r24'])
+    'kinopoisk', 'illuzion'])
 
 # ==================== РАЗВЕДКА ====================
 def fetch_dynamic():
     found = set()
     for page in HTML_SOURCES:
         try:
-            r = get_session().get(page, headers=HEADERS_WEB, timeout=10, verify=False)
+            r = get_session().get(page, headers=HEADERS_WEB, timeout=(5, 10), verify=False)
             if r.status_code == 200:
                 found.update(re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', r.text, re.I))
         except Exception:
@@ -286,7 +285,7 @@ def fetch_dynamic():
 def fetch_ru_regions():
     try:
         r = get_session().get("https://iptv-org.github.io/api/regions.json",
-                              timeout=10, headers=HEADERS_WEB)
+                              timeout=(5, 10), headers=HEADERS_WEB)
         if r.status_code != 200:
             return []
         urls = []
@@ -306,7 +305,7 @@ def fetch_github():
         try:
             r = sess.get('https://api.github.com/search/repositories',
                          params={'q': q, 'per_page': 15, 'sort': 'stars', 'order': 'desc'},
-                         headers=gh_headers, timeout=15)
+                         headers=gh_headers, timeout=(5, 15))
             if r.status_code == 200:
                 for item in r.json().get('items', []):
                     full = item.get('full_name')
@@ -324,16 +323,24 @@ def fetch_github():
         full, branch = repo_branch
         try:
             r = get_session().get('https://raw.githubusercontent.com/' + full + '/' + branch + '/README.md',
-                                  headers=HEADERS_WEB, timeout=10)
+                                  headers=HEADERS_WEB, timeout=(5, 10))
             if r.status_code == 200:
                 return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I)
         except Exception:
             pass
         return []
 
-    with ThreadPoolExecutor(max_workers=15) as ex:
-        for links in ex.map(read_readme, repos):
+    ex = ThreadPoolExecutor(max_workers=15)
+    try:
+        for links in ex.map(read_readme, repos, timeout=90):
             found.update(links)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
 
     for full, branch in repos:
         base = 'https://raw.githubusercontent.com/' + full + '/' + branch
@@ -346,7 +353,7 @@ def fetch_gitlab():
     try:
         r = get_session().get('https://gitlab.com/api/v4/projects',
                               params={'search': 'iptv', 'per_page': 15},
-                              headers=HEADERS_WEB, timeout=15)
+                              headers=HEADERS_WEB, timeout=(5, 15))
         if r.status_code == 200:
             for p in r.json():
                 path = p.get('path_with_namespace')
@@ -363,7 +370,7 @@ def fetch_bitbucket():
     try:
         r = get_session().get('https://api.bitbucket.org/2.0/repositories',
                               params={'q': 'name ~ "iptv"', 'pagelen': 15},
-                              headers=HEADERS_WEB, timeout=15)
+                              headers=HEADERS_WEB, timeout=(5, 15))
         if r.status_code == 200:
             for v in r.json().get('values', []):
                 full = v.get('full_name')
@@ -385,7 +392,7 @@ def fetch_gitea_family():
     ]
     for url, base, rawfmt in apis:
         try:
-            r = get_session().get(url, headers=HEADERS_WEB, timeout=15)
+            r = get_session().get(url, headers=HEADERS_WEB, timeout=(5, 15))
             if r.status_code == 200:
                 for repo in r.json().get('data', []):
                     full = repo.get('full_name')
@@ -403,7 +410,7 @@ def fetch_web_search():
     for q in WEB_QUERIES:
         try:
             r = get_session().get('https://html.duckduckgo.com/html/',
-                                  params={'q': q}, headers=HEADERS_WEB, timeout=15)
+                                  params={'q': q}, headers=HEADERS_WEB, timeout=(5, 15))
             if r.status_code != 200:
                 continue
             m3u.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
@@ -414,16 +421,24 @@ def fetch_web_search():
 
     def scrape(page):
         try:
-            r = get_session().get(page, headers=HEADERS_WEB, timeout=10, verify=False)
+            r = get_session().get(page, headers=HEADERS_WEB, timeout=(5, 10), verify=False)
             if r.status_code == 200:
                 return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I)
         except Exception:
             pass
         return []
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        for links in ex.map(scrape, pages[:25]):
+    ex = ThreadPoolExecutor(max_workers=10)
+    try:
+        for links in ex.map(scrape, pages[:25], timeout=90):
             m3u.update(links)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
     logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
     return list(m3u)
 
@@ -431,7 +446,7 @@ def fetch_telegram():
     found = set()
     for ch in TG_CHANNELS:
         try:
-            r = get_session().get('https://t.me/s/' + ch, headers=HEADERS_WEB, timeout=10)
+            r = get_session().get('https://t.me/s/' + ch, headers=HEADERS_WEB, timeout=(5, 10))
             if r.status_code == 200:
                 found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
         except Exception:
@@ -443,9 +458,9 @@ def fetch_iptv_org_api():
     try:
         sess = get_session()
         ch_r = sess.get("https://iptv-org.github.io/api/channels.json",
-                        timeout=60, headers=HEADERS_WEB)
+                        timeout=(10, 60), headers=HEADERS_WEB)
         st_r = sess.get("https://iptv-org.github.io/api/streams.json",
-                        timeout=60, headers=HEADERS_WEB)
+                        timeout=(10, 60), headers=HEADERS_WEB)
         if ch_r.status_code != 200 or st_r.status_code != 200:
             return []
         names = {}
@@ -479,14 +494,14 @@ def fetch_iptv_org_api():
 
 def fetch_source_text(url):
     try:
-        r = get_session().get(url, timeout=15, headers=HEADERS_WEB, verify=False)
+        r = get_session().get(url, timeout=(5, 10), headers=HEADERS_WEB, verify=False)
         if r.status_code == 200 and r.text:
             return r.text
     except Exception:
         pass
     return None
 
-# ==================== КАТЕГОРИИ (НОРМАЛЬНЫЕ) ====================
+# ==================== КАТЕГОРИИ ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby']):
@@ -495,21 +510,20 @@ def get_category(name):
         return 'Новости'
     if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
         return 'Спорт'
-    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьера', 'боевик', 'детектив', 'мелодрама', 'комедия', 'ужас', 'фантастика', 'наш детектив', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
+    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьера', 'боевик', 'детектив', 'мелодрама', 'комедия', 'ужас', 'фантастика', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
         return 'Кино и сериалы'
-    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'zeli', 'жара', 'лирика', 'блюз', 'jazz', 'rock', 'классик', 'classic', 'euromusic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз']):
+    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз']):
         return 'Музыка'
-    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'кухн', 'еда', 'food', 'здоров', 'health', 'медицин', 'doctor', 'научпоп']):
+    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health', 'медицин']):
         return 'Познавательные'
-    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот', 'кавээн', 'юморист']):
+    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот']):
         return 'Развлекательные'
-    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'обл-тв', 'городской']):
+    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'городской']):
         return 'Региональные'
     if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
         return 'Федеральные'
     return 'Общие'
 
-# ==================== ФИЛЬТРЫ ====================
 def is_adult(name):
     n = name.lower()
     return any(w in n for w in ADULT_WORDS)
@@ -535,7 +549,6 @@ def is_radio(name):
     return False
 
 def is_russian_like(name):
-    """Кириллица ИЛИ латинские/цифровые имена российских каналов"""
     if re.search(r'[\u0400-\u04FF]', name):
         return True
     n = name.lower()
@@ -691,7 +704,7 @@ def flush_playlist(alive, elapsed=None):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
-# ==================== ОБНОВЛЕНИЕ ====================
+# ==================== ОБНОВЛЕНИЕ (С ДЕДЛАЙНАМИ ФАЗ) ====================
 def update_cache():
     global playlist_cache, is_updating
     if is_updating:
@@ -716,11 +729,27 @@ def update_cache():
         sources = base + extra[:MAX_EXTRA_SOURCES]
         logger.info(f"ВСЕГО источников: {len(sources)}")
 
+        # ФАЗА 1: загрузка источников, жёсткий дедлайн 4 минуты
         texts = []
-        with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as ex:
-            for txt in ex.map(fetch_source_text, sources):
+        ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
+        futs = [ex.submit(fetch_source_text, u) for u in sources]
+        try:
+            for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
+                try:
+                    txt = f.result()
+                except Exception:
+                    txt = None
                 if txt:
                     texts.append(txt)
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы источников ({SOURCE_PHASE_MAX}с), беру что успело: {len(texts)}")
+        except Exception as e:
+            logger.error(f"Ошибка фазы источников: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
         logger.info(f"Загружено плейлистов: {len(texts)}")
 
         entries = {}
@@ -771,13 +800,15 @@ def update_cache():
             stats['parsed_channels'] = len(raw)
         logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
 
+        # ФАЗА 2: проверка, жёсткий дедлайн 25 минут
         alive = []
         since_flush = 0
         checked = 0
         last_beat = time.time()
-        with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
-            futs = {ex.submit(check_one, ch): ch for ch in raw}
-            for f in as_completed(futs):
+        ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
+        futs = {ex.submit(check_one, ch): ch for ch in raw}
+        try:
+            for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
                 checked += 1
                 ch = futs[f]
                 try:
@@ -792,6 +823,15 @@ def update_cache():
                 if time.time() - last_beat > HEARTBEAT_SEC:
                     logger.info(f"Прогресс проверки: {checked}/{len(raw)}, живых: {len(alive)}")
                     last_beat = time.time()
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы проверки ({CHECK_PHASE_MAX}с), фиксирую: {len(alive)} живых")
+        except Exception as e:
+            logger.error(f"Ошибка фазы проверки: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
 
         elapsed = time.time() - start
         flush_playlist(alive, elapsed=elapsed)
@@ -848,7 +888,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">80+ источников • 10 категорий • Без радио/18+/UA/подписок</div>
+<div class="sub">80+ источников • 10 категорий • Дедлайны фаз • Без зависаний</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
