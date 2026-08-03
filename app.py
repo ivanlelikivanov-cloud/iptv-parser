@@ -1,15 +1,24 @@
 import os
 import re
 import time
+import math
 import logging
 import threading
+import sqlite3
+import pickle
 import requests
 import urllib3
-from urllib.parse import unquote
+from urllib.parse import urlparse, unquote
 from collections import Counter
 from requests.adapters import HTTPAdapter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, Response, jsonify
+
+try:
+    from sklearn.linear_model import SGDClassifier
+    HAS_SKLEARN = True
+except Exception:
+    HAS_SKLEARN = False
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -151,8 +160,8 @@ MAX_CHECK_POOL = 5000
 SOURCE_WORKERS = 20
 CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
-SOURCE_PHASE_MAX = 240     # максимум 4 минуты на загрузку источников
-CHECK_PHASE_MAX = 1500     # максимум 25 минут на проверку
+SOURCE_PHASE_MAX = 240
+CHECK_PHASE_MAX = 1500
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 15
@@ -177,6 +186,9 @@ stats = {
     "alive_channels": 0,
     "filtered": {},
     "categories": {},
+    "ml_samples": 0,
+    "ml_accuracy": 0.0,
+    "ml_on": HAS_SKLEARN,
 }
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -185,9 +197,146 @@ logger = logging.getLogger(__name__)
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
+BLOCK_MARKERS = [b'roskomnadzor', b'zablokirovan', b'blocked', b'restricted',
+                 b'forbidden', b'captcha', b'cloudflare', b'access denied',
+                 b'denied', b'trebuetsya', b'оплат', b'заблокирован']
 
-CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'playlist_disk.m3u')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
+DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
+MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
 
+# ==================== ML-МОЗГ ====================
+class MLBrain:
+    """Онлайн-обучение: приоритизация кандидатов + репутация хостов"""
+
+    def __init__(self):
+        self.host_alive = {}
+        self.host_total = {}
+        self.model = None
+        self.trained_samples = 0
+        self.last_accuracy = 0.0
+        self.db = None
+        self.lock = threading.Lock()
+        try:
+            self.db = sqlite3.connect(DB_FILE, check_same_thread=False)
+            with self.lock:
+                self.db.execute('CREATE TABLE IF NOT EXISTS checks '
+                                '(id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, alive INTEGER, ts REAL)')
+                self.db.commit()
+                rows = self.db.execute('SELECT host, SUM(alive), COUNT(*) FROM checks GROUP BY host').fetchall()
+            for host, s, c in rows:
+                self.host_alive[host] = int(s)
+                self.host_total[host] = int(c)
+            logger.info(f"🧠 ML: история из БД: {len(rows)} хостов")
+        except Exception as e:
+            logger.error(f"🧠 ML: БД недоступна: {e}")
+            self.db = None
+        try:
+            if HAS_SKLEARN and os.path.exists(MODEL_FILE):
+                with open(MODEL_FILE, 'rb') as f:
+                    self.model = pickle.load(f)
+                logger.info("🧠 ML: модель загружена с диска")
+        except Exception:
+            self.model = None
+
+    def host_stats(self, host):
+        t = self.host_total.get(host, 0)
+        a = self.host_alive.get(host, 0)
+        if t == 0:
+            return 0.5, 0
+        return (a + 1.0) / (t + 2.0), t
+
+    def record(self, host, alive):
+        self.host_total[host] = self.host_total.get(host, 0) + 1
+        self.host_alive[host] = self.host_alive.get(host, 0) + (1 if alive else 0)
+        if self.db is None:
+            return
+        try:
+            with self.lock:
+                self.db.execute('INSERT INTO checks (host, alive, ts) VALUES (?,?,?)',
+                                (host, 1 if alive else 0, time.time()))
+                self.db.commit()
+        except Exception:
+            pass
+
+    def model_prob(self, feats):
+        if self.model is None:
+            return None
+        try:
+            z = self.model.decision_function([feats])[0]
+            return 1.0 / (1.0 + math.exp(-z))
+        except Exception:
+            return None
+
+    def score(self, feats, host):
+        """Итоговый приоритет: модель + репутация хоста + эвристики"""
+        rep, cnt = self.host_stats(host)
+        heur = 0.5 * feats[2] + 0.3 * feats[3] + 0.2 * (1.0 - feats[5])
+        p = self.model_prob(feats)
+        if p is None:
+            return 0.55 * rep + 0.25 * heur + 0.2 * min(cnt / 10.0, 1.0)
+        return 0.5 * p + 0.35 * rep + 0.15 * heur
+
+    def train(self, samples):
+        if not HAS_SKLEARN or not samples or len(samples) < 20:
+            return
+        X = [s[0] for s in samples]
+        y = [s[1] for s in samples]
+        if len(set(y)) < 2:
+            return
+        acc = None
+        if self.model is not None:
+            try:
+                preds = [1 if self.model_prob(x) and self.model_prob(x) > 0.5 else 0 for x in X[:200]]
+                acc = sum(1 for p, t in zip(preds, y[:200]) if p == t) / max(1, len(preds))
+            except Exception:
+                acc = None
+        try:
+            if self.model is None:
+                self.model = SGDClassifier(loss='log_loss', learning_rate='optimal', random_state=42)
+            self.model.partial_fit(X, y, classes=[0, 1])
+            self.trained_samples += len(samples)
+            if acc is not None:
+                self.last_accuracy = acc
+            with open(MODEL_FILE, 'wb') as f:
+                pickle.dump(self.model, f)
+            logger.info(f"🧠 ML: дообучено на {len(samples)} примерах "
+                        f"(всего {self.trained_samples}), acc до обучения: {acc if acc is not None else 'н/д'}")
+        except Exception as e:
+            logger.error(f"🧠 ML: ошибка обучения: {e}")
+        if self.db is not None:
+            try:
+                with self.lock:
+                    self.db.execute('DELETE FROM checks WHERE id NOT IN '
+                                    '(SELECT id FROM checks ORDER BY ts DESC LIMIT 20000)')
+                    self.db.commit()
+            except Exception:
+                pass
+
+brain = MLBrain()
+
+def extract_features(ch):
+    url = ch['url']
+    name = (ch.get('name') or '').lower()
+    u = url.lower()
+    rep, cnt = brain.host_stats(urlparse(url).netloc)
+    return [
+        min(len(u) / 300.0, 1.0),
+        min(u.count('/') / 8.0, 1.0),
+        1.0 if u.startswith('https') else 0.0,
+        1.0 if '.m3u8' in u else 0.0,
+        1.0 if re.search(r'\.(ts|mp4|mkv|flv)(\?|$)', u) else 0.0,
+        1.0 if any(t in u for t in ['token', 'key=', 'auth', 'session', 'sig=']) else 0.0,
+        1.0 if ('hd' in name or '4k' in name) else 0.0,
+        min(len(name) / 40.0, 1.0),
+        rep,
+        min(cnt / 20.0, 1.0),
+        1.0 if (ch.get('ua') or ch.get('ref')) else 0.0,
+        1.0 if 'iptv-org' in u else 0.0,
+    ]
+
+# ==================== ДИСКОВЫЙ КЭШ / KEEPALIVE ====================
 def load_disk_cache():
     global playlist_cache
     try:
@@ -232,6 +381,7 @@ def get_session():
         _thread_local.session = s
     return s
 
+# ==================== СЛОВАРИ ФИЛЬТРОВ ====================
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -501,7 +651,7 @@ def fetch_source_text(url):
         pass
     return None
 
-# ==================== КАТЕГОРИИ ====================
+# ==================== КАТЕГОРИИ И ФИЛЬТРЫ ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby']):
@@ -577,7 +727,7 @@ def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
-# ==================== ПРОВЕРКА ====================
+# ==================== ПРОВЕРКА (С ДЕТЕКТОРОМ БЛОКИРОВОК) ====================
 def check_one(ch):
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -631,7 +781,9 @@ def check_one(ch):
         low = chunk[:300].lower()
         if b'#extm3u' in low or b'#extinf' in low:
             return True
-        if b'<html' in low or b'<!doctype' in low or b'access denied' in low or b'<script' in low:
+        if b'<html' in low or b'<!doctype' in low or b'<script' in low:
+            return False
+        if any(m in low for m in BLOCK_MARKERS):
             return False
         return True
 
@@ -688,7 +840,7 @@ def flush_playlist(alive, elapsed=None):
     cat_counts = Counter(ch['cat'] for ch in alive_sorted)
     lines = [
         '#EXTM3U',
-        '# IPTV Russia Pro MAX | ' + time.strftime('%Y-%m-%d %H:%M'),
+        '# IPTV Russia Pro MAX + ML | ' + time.strftime('%Y-%m-%d %H:%M'),
         '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без радио | без подписок',
     ]
     for ch in alive_sorted:
@@ -704,14 +856,14 @@ def flush_playlist(alive, elapsed=None):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
-# ==================== ОБНОВЛЕНИЕ (С ДЕДЛАЙНАМИ ФАЗ) ====================
+# ==================== ОБНОВЛЕНИЕ ====================
 def update_cache():
     global playlist_cache, is_updating
     if is_updating:
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG + ML-приоритизация...")
 
     try:
         api_channels = fetch_iptv_org_api()
@@ -729,7 +881,6 @@ def update_cache():
         sources = base + extra[:MAX_EXTRA_SOURCES]
         logger.info(f"ВСЕГО источников: {len(sources)}")
 
-        # ФАЗА 1: загрузка источников, жёсткий дедлайн 4 минуты
         texts = []
         ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
         futs = [ex.submit(fetch_source_text, u) for u in sources]
@@ -788,8 +939,16 @@ def update_cache():
             stats['filtered'] = dict(reasons)
 
         raw = list(entries.values())
+
+        # 🧠 ML: скоринг и умная сортировка — лучшие кандидаты проверяются первыми
+        for ch in raw:
+            ch['feats'] = extract_features(ch)
+            ch['host'] = urlparse(ch['url']).netloc
+            ch['ml_score'] = brain.score(ch['feats'], ch['host'])
+        raw.sort(key=lambda c: -c['ml_score'])
+
         if len(raw) > MAX_CHECK_POOL:
-            logger.info(f"Кандидатов {len(raw)}, беру первые {MAX_CHECK_POOL}")
+            logger.info(f"Кандидатов {len(raw)}, ML выбрал топ-{MAX_CHECK_POOL}")
             raw = raw[:MAX_CHECK_POOL]
         if not raw:
             logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
@@ -800,8 +959,8 @@ def update_cache():
             stats['parsed_channels'] = len(raw)
         logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
 
-        # ФАЗА 2: проверка, жёсткий дедлайн 25 минут
         alive = []
+        samples = []
         since_flush = 0
         checked = 0
         last_beat = time.time()
@@ -812,14 +971,17 @@ def update_cache():
                 checked += 1
                 ch = futs[f]
                 try:
-                    if f.result():
-                        alive.append(ch)
-                        since_flush += 1
-                        if since_flush >= FLUSH_EVERY:
-                            flush_playlist(alive)
-                            since_flush = 0
+                    ok = bool(f.result())
                 except Exception:
-                    pass
+                    ok = False
+                if ok:
+                    alive.append(ch)
+                    since_flush += 1
+                    if since_flush >= FLUSH_EVERY:
+                        flush_playlist(alive)
+                        since_flush = 0
+                samples.append((ch['feats'], 1 if ok else 0))
+                brain.record(ch['host'], ok)
                 if time.time() - last_beat > HEARTBEAT_SEC:
                     logger.info(f"Прогресс проверки: {checked}/{len(raw)}, живых: {len(alive)}")
                     last_beat = time.time()
@@ -832,6 +994,12 @@ def update_cache():
                 ex.shutdown(wait=False, cancel_futures=True)
             except TypeError:
                 ex.shutdown(wait=False)
+
+        # 🧠 ML: дообучение на свежих данных
+        brain.train(samples)
+        with cache_lock:
+            stats['ml_samples'] = brain.trained_samples
+            stats['ml_accuracy'] = round(brain.last_accuracy, 3)
 
         elapsed = time.time() - start
         flush_playlist(alive, elapsed=elapsed)
@@ -873,7 +1041,7 @@ def make_playlist_response():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX</title>
+<title>IPTV Russia Pro MAX + ML</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -887,16 +1055,16 @@ h1{margin:0 0 8px;font-size:32px}
 .stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">80+ источников • 10 категорий • Дедлайны фаз • Без зависаний</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠</h1>
+<div class="sub">80+ источников • ML-приоритизация • Онлайн-обучение • 10 категорий</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
 <div class="stats">
 <div class="stat"><b>__ALIVE__</b><span>живых каналов</span></div>
 <div class="stat"><b>__PARSED__</b><span>проверено</span></div>
-<div class="stat"><b>__API__</b><span>потоков из API</span></div>
-<div class="stat"><b>__DURATION__</b><span>сек. проверки</span></div>
+<div class="stat"><b>__MLS__</b><span>ML примеров</span></div>
+<div class="stat"><b>__MLA__</b><span>ML точность</span></div>
 </div>
 <div class="sub">Обновлено: __UPDATED__</div>
 <div>__CATS__</div>
@@ -912,8 +1080,8 @@ def make_home_page():
     page = HOME_TEMPLATE
     page = page.replace('__ALIVE__', str(s.get('alive_channels', 0)))
     page = page.replace('__PARSED__', str(s.get('parsed_channels', 0)))
-    page = page.replace('__API__', str(s.get('api_streams', 0)))
-    page = page.replace('__DURATION__', str(s.get('duration_sec', 0)))
+    page = page.replace('__MLS__', str(s.get('ml_samples', 0)))
+    page = page.replace('__MLA__', str(s.get('ml_accuracy', 0)))
     page = page.replace('__UPDATED__', str(s.get('last_update') or 'ещё идёт первая проверка...'))
     page = page.replace('__CATS__', cat_html)
     return page
