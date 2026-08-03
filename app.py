@@ -160,11 +160,12 @@ MAX_CHECK_POOL = 5000
 SOURCE_WORKERS = 20
 CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
+SEED_TIMEOUT = 8.0
 SOURCE_PHASE_MAX = 240
 CHECK_PHASE_MAX = 1500
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
-FLUSH_EVERY = 15
+FLUSH_EVERY = 10
 HEARTBEAT_SEC = 20
 KEEPALIVE_SEC = 300
 
@@ -198,7 +199,6 @@ HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
 
-# ИСПРАВЛЕНО: обычные строки (НЕ bytes!) — кириллица теперь легальна
 BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'forbidden', 'captcha', 'cloudflare', 'access denied',
                  'denied', 'trebuetsya', 'оплат', 'заблокирован',
@@ -211,8 +211,6 @@ MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
 
 # ==================== ML-МОЗГ ====================
 class MLBrain:
-    """Онлайн-обучение: приоритизация кандидатов + репутация хостов"""
-
     def __init__(self):
         self.host_alive = {}
         self.host_total = {}
@@ -733,7 +731,8 @@ def is_hd(name):
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
 # ==================== ПРОВЕРКА ====================
-def check_one(ch):
+def check_one(ch, limit=None):
+    lim = limit or CHECK_TIMEOUT
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
     if ch.get('ua'):
@@ -745,10 +744,10 @@ def check_one(ch):
     start = time.monotonic()
 
     def remaining():
-        return CHECK_TIMEOUT - (time.monotonic() - start)
+        return lim - (time.monotonic() - start)
 
     try:
-        r = session.head(url, timeout=min(10, CHECK_TIMEOUT), headers=headers,
+        r = session.head(url, timeout=min(10, lim), headers=headers,
                          allow_redirects=True, verify=False)
         if r.status_code < 400:
             ct = r.headers.get('content-type', '').lower()
@@ -788,7 +787,6 @@ def check_one(ch):
             return True
         if b'<html' in low or b'<!doctype' in low or b'<script' in low:
             return False
-        # ИСПРАВЛЕНО: декодируем байты в строку и ищем маркеры блокировок
         try:
             txt_low = low.decode('utf-8', errors='ignore')
         except Exception:
@@ -866,6 +864,61 @@ def flush_playlist(alive, elapsed=None):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
+# ==================== ⚡ БЫСТРЫЙ СТАРТОВЫЙ НАБОР ====================
+def quick_seed():
+    """Первые каналы в плейлисте за 1-2 минуты, до конца большого прогона"""
+    logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
+    seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
+    texts = []
+    ex = ThreadPoolExecutor(max_workers=12)
+    try:
+        for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
+            if txt:
+                texts.append(txt)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+
+    entries = {}
+    seen = set()
+    reasons = Counter()
+    for txt in texts:
+        parse_m3u(txt, entries, seen, reasons)
+    raw = list(entries.values())[:1000]
+    if not raw:
+        logger.warning("⚡ Стартовый набор пуст, ждём большой прогон")
+        return 0
+
+    alive = []
+    ex = ThreadPoolExecutor(max_workers=60)
+    futs = {ex.submit(check_one, ch, SEED_TIMEOUT): ch for ch in raw}
+    try:
+        for f in as_completed(futs.keys(), timeout=90):
+            ch = futs[f]
+            try:
+                ok = bool(f.result())
+            except Exception:
+                ok = False
+            if ok:
+                alive.append(ch)
+            brain.record(ch.get('host', urlparse(ch['url']).netloc), ok)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+
+    if alive:
+        flush_playlist(alive)
+        logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
+    return len(alive)
+
 # ==================== ОБНОВЛЕНИЕ ====================
 def update_cache():
     global playlist_cache, is_updating
@@ -876,6 +929,9 @@ def update_cache():
     logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG + ML-приоритизация...")
 
     try:
+        # ⚡ Сначала быстрый набор — плеер получает каналы сразу
+        quick_seed()
+
         api_channels = fetch_iptv_org_api()
         logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/радио): {len(api_channels)}")
 
@@ -950,7 +1006,6 @@ def update_cache():
 
         raw = list(entries.values())
 
-        # 🧠 ML: скоринг и умная сортировка — лучшие кандидаты проверяются первыми
         for ch in raw:
             ch['feats'] = extract_features(ch)
             ch['host'] = urlparse(ch['url']).netloc
@@ -1005,7 +1060,6 @@ def update_cache():
             except TypeError:
                 ex.shutdown(wait=False)
 
-        # 🧠 ML: дообучение на свежих данных
         brain.train(samples)
         with cache_lock:
             stats['ml_samples'] = brain.trained_samples
@@ -1044,8 +1098,7 @@ def make_playlist_response():
         data = playlist_cache
     resp = Response(data, mimetype='application/vnd.apple.mpegurl')
     resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
-    has_channels = '\nhttp' in data
-    resp.headers['Cache-Control'] = 'public, max-age=3600' if has_channels else 'no-store'
+    resp.headers['Cache-Control'] = 'no-store'
     return resp
 
 HOME_TEMPLATE = """<!DOCTYPE html>
@@ -1066,7 +1119,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">80+ источников • ML-приоритизация • Онлайн-обучение • 10 категорий</div>
+<div class="sub">⚡ Быстрый старт • ML-приоритизация • 80+ источников • 10 категорий</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
