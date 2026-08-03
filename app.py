@@ -95,9 +95,7 @@ TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru
                'iptv_rf', 'playlist_iptv', 'iptv_su', 'free_iptv_ru',
                'iptv_list', 'ru_iptv', 'iptv_tv_ru']
 
-BLACKLIST_WORDS = ['fifa', 'world cup', 'чемпионат мира', 'плей-офф']
-
-# ==================== НАСТРОЙКИ ПОД FREE-ТАРИФ ====================
+# ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 15000
 MAX_EXTRA_SOURCES = 150
 MAX_CHECK_POOL = 3000
@@ -147,6 +145,30 @@ def get_session():
         s.mount('https://', adapter)
         _thread_local.session = s
     return s
+
+# ==================== ФИЛЬТРЫ (ТОЛЬКО ТЕКСТ, БЕЗ ЭМОДЗИ) ====================
+def _clean(lst):
+    """Страховка: выкидывает пустые/короткие строки — баг с '' невозможен"""
+    return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
+
+ADULT_WORDS = _clean(['xxx', 'adult', 'porn', 'sex', 'hentai', '18+',
+                      'эротика', 'порно', 'nude', 'playboy'])
+
+UA_WORDS = _clean(['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ',
+                   'львів', 'львов', 'харків', 'дніпро', 'одеса', 'суспільне',
+                   'суспильне', 'прямий', 'тсн', '1+1', '2+2', 'інтер',
+                   'inter ua', 'верес', 'тоніс', 'тонис', 'ua: ', 'ua |',
+                   '| ua', ' ukraine', 'украинск'])
+
+PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment', 'купить',
+                        'продаж', 'whatsapp', 'telegram', 't.me', 'promo',
+                        'реклам', 'advert', 'магазин', 'shop', 'store',
+                        'premium', 'премиум', 'vip', 'вип', 'ppv',
+                        'pay per view', 'активация', 'iptv', 'fifa',
+                        'world cup', 'чемпионат мира', 'плей-офф', 'тариф',
+                        'абонент'])
+
+BLACKLIST_WORDS = _clean(['fifa', 'world cup', 'чемпионат мира', 'плей-офф'])
 
 # ==================== РАЗВЕДКА ====================
 def fetch_dynamic():
@@ -361,7 +383,7 @@ def fetch_source_text(url):
         pass
     return None
 
-# ==================== ФИЛЬТРЫ ====================
+# ==================== ЛОГИКА ФИЛЬТРОВ ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
@@ -382,19 +404,6 @@ def get_category(name):
         return 'Федеральные'
     return 'Общие'
 
-ADULT_WORDS = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'nude', 'playboy']
-UA_WORDS = ['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ', 'львів', 'львов',
-            'харків', 'дніпро', 'одеса', 'суспільне', 'суспильне', 'прямий', 'тсн',
-            '1+1', '2+2', 'інтер', 'inter ua', 'верес', 'тоніс', 'тонис',
-            'ua: ', 'ua |', '| ua', ' ukraine', 'украинск']
-PAYWALL_WORDS = ['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
-                 'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
-                 'магазин', 'shop', 'store', 'premium', 'премиум', 'vip', 'вип',
-                 'ppv', 'pay per view', 'активация', 'iptv', 'fifa', 'world cup',
-                 'чемпионат мира', 'плей-офф', 'плей офф', 'тариф', 'абонент',
-                 'цена', 'price', 'доступ', 'access',
-                 '💳', '', '🛒', '💵', '💸', '💎', '🎁', '', '⚽', '']
-
 def is_adult(name):
     n = name.lower()
     return any(w in n for w in ADULT_WORDS)
@@ -407,7 +416,7 @@ def is_paywall(name):
     n = name.lower()
     if any(w in n for w in PAYWALL_WORDS):
         return True
-    if BLACKLIST_WORDS and any(w.lower() in n for w in BLACKLIST_WORDS):
+    if any(w.lower() in n for w in BLACKLIST_WORDS):
         return True
     return False
 
