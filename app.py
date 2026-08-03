@@ -5,6 +5,7 @@ import logging
 import threading
 import requests
 import urllib3
+from urllib.parse import unquote
 from collections import Counter
 from requests.adapters import HTTPAdapter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# ==================== ИСТОЧНИКИ ====================
+# ==================== СТАТИКА ====================
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
@@ -70,12 +71,20 @@ FALLBACK_REGIONS = [
     "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
-# ==================== НАСТРОЙКИ МАКСИМУМ ====================
+# ==================== РАЗВЕДКА: КОНФИГ ====================
+GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv']
+GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
+                   'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
+PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
+WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia']
+TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru']
+
+# ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 15000
-SOURCE_WORKERS = 30
+SOURCE_WORKERS = 40
 CHECK_WORKERS = 150
-CHECK_TIMEOUT = 40.0           # 40 секунд на канал, как заказано
-UPDATE_EVERY = 86400           # раз в 24 часа
+CHECK_TIMEOUT = 40.0
+UPDATE_EVERY = 86400
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD'}
 
@@ -115,7 +124,7 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== СБОР ИСТОЧНИКОВ ====================
+# ==================== РАЗВЕДКА ПО ПЛАТФОРМАМ ====================
 def fetch_dynamic():
     found = set()
     for page in HTML_SOURCES:
@@ -142,9 +151,149 @@ def fetch_ru_regions():
     except Exception:
         return []
 
+def fetch_github():
+    sess = get_session()
+    gh_headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/vnd.github+json'}
+    repos = []
+    for q in GITHUB_QUERIES:
+        try:
+            r = sess.get('https://api.github.com/search/repositories',
+                         params={'q': q, 'per_page': 20, 'sort': 'stars', 'order': 'desc'},
+                         headers=gh_headers, timeout=15)
+            if r.status_code == 200:
+                for item in r.json().get('items', []):
+                    full = item.get('full_name')
+                    branch = item.get('default_branch') or 'main'
+                    if full:
+                        repos.append((full, branch))
+        except Exception:
+            continue
+    repos = list(dict.fromkeys(repos))[:50]
+    logger.info(f"GitHub: репозиториев: {len(repos)}")
+
+    found = set()
+
+    def read_readme(repo_branch):
+        full, branch = repo_branch
+        try:
+            r = get_session().get('https://raw.githubusercontent.com/' + full + '/' + branch + '/README.md',
+                                  headers=HEADERS_WEB, timeout=10)
+            if r.status_code == 200:
+                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I)
+        except Exception:
+            pass
+        return []
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for links in ex.map(read_readme, repos):
+            found.update(links)
+
+    for full, branch in repos:
+        base = 'https://raw.githubusercontent.com/' + full + '/' + branch
+        for path in GH_COMMON_PATHS:
+            found.add(base + '/' + path)
+    return list(found)
+
+def fetch_gitlab():
+    found = set()
+    try:
+        r = get_session().get('https://gitlab.com/api/v4/projects',
+                              params={'search': 'iptv', 'per_page': 20},
+                              headers=HEADERS_WEB, timeout=15)
+        if r.status_code == 200:
+            for p in r.json():
+                path = p.get('path_with_namespace')
+                branch = p.get('default_branch') or 'main'
+                if path:
+                    for pth in PROBE_PATHS:
+                        found.add('https://gitlab.com/' + path + '/-/raw/' + branch + '/' + pth)
+    except Exception:
+        pass
+    return list(found)
+
+def fetch_bitbucket():
+    found = set()
+    try:
+        r = get_session().get('https://api.bitbucket.org/2.0/repositories',
+                              params={'q': 'name ~ "iptv"', 'pagelen': 20},
+                              headers=HEADERS_WEB, timeout=15)
+        if r.status_code == 200:
+            for v in r.json().get('values', []):
+                full = v.get('full_name')
+                branch = (v.get('mainbranch') or {}).get('name') or 'master'
+                if full:
+                    for pth in PROBE_PATHS:
+                        found.add('https://bitbucket.org/' + full + '/raw/' + branch + '/' + pth)
+    except Exception:
+        pass
+    return list(found)
+
+def fetch_gitea_family():
+    """Codeberg + Gitea"""
+    found = set()
+    apis = [
+        ('https://codeberg.org/api/v1/repos/search?q=iptv&limit=15',
+         'https://codeberg.org/', '/raw/branch/'),
+        ('https://gitea.com/api/v1/repos/search?q=iptv&limit=15',
+         'https://gitea.com/', '/raw/'),
+    ]
+    for url, base, rawfmt in apis:
+        try:
+            r = get_session().get(url, headers=HEADERS_WEB, timeout=15)
+            if r.status_code == 200:
+                for repo in r.json().get('data', []):
+                    full = repo.get('full_name')
+                    branch = repo.get('default_branch') or 'main'
+                    if full:
+                        for pth in PROBE_PATHS:
+                            found.add(base + full + rawfmt + branch + '/' + pth)
+        except Exception:
+            continue
+    return list(found)
+
+def fetch_web_search():
+    """DuckDuckGo: прямые m3u + парсинг найденных страниц"""
+    m3u = set()
+    pages = []
+    for q in WEB_QUERIES:
+        try:
+            r = get_session().get('https://html.duckduckgo.com/html/',
+                                  params={'q': q}, headers=HEADERS_WEB, timeout=15)
+            if r.status_code != 200:
+                continue
+            m3u.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
+            for enc in re.findall(r'uddg=([^&"]+)', r.text):
+                pages.append(unquote(enc))
+        except Exception:
+            continue
+
+    def scrape(page):
+        try:
+            r = get_session().get(page, headers=HEADERS_WEB, timeout=10, verify=False)
+            if r.status_code == 200:
+                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I)
+        except Exception:
+            pass
+        return []
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for links in ex.map(scrape, pages[:30]):
+            m3u.update(links)
+    logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
+    return list(m3u)
+
+def fetch_telegram():
+    found = set()
+    for ch in TG_CHANNELS:
+        try:
+            r = get_session().get('https://t.me/s/' + ch, headers=HEADERS_WEB, timeout=10)
+            if r.status_code == 200:
+                found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
+        except Exception:
+            continue
+    return list(found)
+
 def fetch_iptv_org_api():
-    """ГЛАВНАЯ МОЩЬ: вся база потоков iptv-org, фильтруем по РФ/СНГ/русскому языку.
-    Сохраняем персональные User-Agent и Referer потоков."""
     try:
         sess = get_session()
         ch_r = sess.get("https://iptv-org.github.io/api/channels.json",
@@ -190,7 +339,7 @@ def fetch_source_text(url):
             continue
     return None
 
-# ==================== ФИЛЬТРЫ И КАТЕГОРИИ ====================
+# ==================== ФИЛЬТРЫ ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
@@ -229,7 +378,7 @@ def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
-# ==================== ПРОВЕРКА (<= 40 сек, с личными заголовками) ====================
+# ==================== ПРОВЕРКА (<= 40 сек) ====================
 def check_one(ch):
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -244,7 +393,6 @@ def check_one(ch):
     def remaining():
         return CHECK_TIMEOUT - (time.monotonic() - start)
 
-    # Быстрый путь: HEAD с хорошим Content-Type
     try:
         r = session.head(url, timeout=min(10, CHECK_TIMEOUT), headers=headers,
                          allow_redirects=True, verify=False)
@@ -255,7 +403,6 @@ def check_one(ch):
     except Exception:
         pass
 
-    # Основной путь: GET + анализ контента, 2 попытки при сетевых ошибках
     for _ in range(2):
         if remaining() <= 1:
             return False
@@ -333,20 +480,21 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: выгрузка базы потоков + сбор плейлистов...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ (GitHub/GitLab/Bitbucket/Codeberg/Gitea/Web/TG)...")
 
     try:
-        # 1. Прямая выгрузка из API iptv-org
         api_channels = fetch_iptv_org_api()
         logger.info(f"API iptv-org: потоков РФ/СНГ: {len(api_channels)}")
 
-        # 2. M3U-источники
         regions = fetch_ru_regions()
         if not regions:
             regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u'
                        for r in FALLBACK_REGIONS]
-        sources = list(set(STATIC_SOURCES + regions + fetch_dynamic()))
-        logger.info(f"M3U источников: {len(sources)}")
+
+        sources = list(set(STATIC_SOURCES + regions + fetch_dynamic() + fetch_github()
+                           + fetch_gitlab() + fetch_bitbucket() + fetch_gitea_family()
+                           + fetch_web_search() + fetch_telegram()))
+        logger.info(f"ВСЕГО источников со всех платформ: {len(sources)}")
 
         texts = []
         with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as ex:
@@ -355,7 +503,6 @@ def update_cache():
                     texts.append(txt)
         logger.info(f"Загружено плейлистов: {len(texts)}")
 
-        # 3. Объединяем: сначала API-потоки, потом плейлисты
         entries = {}
         seen = set()
         for ach in api_channels:
@@ -384,7 +531,6 @@ def update_cache():
         raw = list(entries.values())
         logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
 
-        # 4. Массовая проверка
         alive = []
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
             futs = {ex.submit(check_one, ch): ch for ch in raw}
@@ -447,7 +593,7 @@ def background_worker():
 
 threading.Thread(target=background_worker, daemon=True).start()
 
-# ==================== ВЕБ-ИНТЕРФЕЙС ====================
+# ==================== ВЕБ ====================
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -466,7 +612,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷🇺 IPTV Russia Pro MAX</h1>
-<div class="sub">База iptv-org API + автопоиск плейлистов • проверка 40 сек • обновление раз в 24 ч</div>
+<div class="sub">GitHub • GitLab • Bitbucket • Codeberg • Gitea • Web • TG • iptv-org</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
