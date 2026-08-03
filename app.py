@@ -34,6 +34,10 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ge.m3u",
     "https://iptv-org.github.io/iptv/countries/md.m3u",
     "https://iptv-org.github.io/iptv/countries/tj.m3u",
+    # Диаспора: русскоязычные каналы за рубежом
+    "https://iptv-org.github.io/iptv/countries/il.m3u",
+    "https://iptv-org.github.io/iptv/countries/de.m3u",
+    "https://iptv-org.github.io/iptv/countries/us.m3u",
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
@@ -50,6 +54,7 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/categories/comedy.m3u",
     "https://iptv-org.github.io/iptv/categories/series.m3u",
     "https://iptv-org.github.io/iptv/categories/animation.m3u",
+    "https://iptv-org.github.io/iptv/categories/religious.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
@@ -95,12 +100,12 @@ TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru
                'iptv_rf', 'playlist_iptv', 'iptv_su', 'free_iptv_ru',
                'iptv_list', 'ru_iptv', 'iptv_tv_ru']
 
-# ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 15000
+# ==================== НАСТРОЙКИ (БОЛЬШЕ КАНАЛОВ) ====================
+MAX_CHANNELS = 20000
 MAX_EXTRA_SOURCES = 150
-MAX_CHECK_POOL = 3000
+MAX_CHECK_POOL = 5000
 SOURCE_WORKERS = 20
-CHECK_WORKERS = 50
+CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
@@ -146,9 +151,8 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== ФИЛЬТРЫ (ТОЛЬКО ТЕКСТ, БЕЗ ЭМОДЗИ) ====================
+# ==================== ФИЛЬТРЫ (ТОЛЬКО ТЕКСТ + ПРЕДОХРАНИТЕЛЬ) ====================
 def _clean(lst):
-    """Страховка: выкидывает пустые/короткие строки — баг с '' невозможен"""
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
 ADULT_WORDS = _clean(['xxx', 'adult', 'porn', 'sex', 'hentai', '18+',
@@ -396,7 +400,7 @@ def get_category(name):
         return 'Кино и сериалы'
     if any(w in n for w in ['музык', 'music', 'radio', 'радио', 'mtv', 'bridge', 'шансон', 'ретро']):
         return 'Музыка'
-    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'культур', 'travel', 'путешеств']):
+    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'культур', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз']):
         return 'Познавательные'
     if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'кухн', 'еда', 'food', 'мода']):
         return 'Развлекательные'
@@ -444,7 +448,7 @@ def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
-# ==================== ПРОВЕРКА (<= 40 сек) ====================
+# ==================== ПРОВЕРКА (<= 40 сек, мягче к контенту) ====================
 def check_one(ch):
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -498,11 +502,11 @@ def check_one(ch):
         low = chunk[:300].lower()
         if b'#extm3u' in low or b'#extinf' in low:
             return True
-        if b'<html' in low or b'<!doctype' in low or b'access denied' in low:
+        # HTML-заглушки провайдеров — в мусорку
+        if b'<html' in low or b'<!doctype' in low or b'access denied' in low or b'<script' in low:
             return False
-        if b'\x00' in low:
-            return True
-        return False
+        # Любые другие данные (даже без заголовков) — канал живой
+        return True
 
     return False
 
