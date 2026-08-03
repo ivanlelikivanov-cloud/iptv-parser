@@ -70,12 +70,14 @@ FALLBACK_REGIONS = [
     "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
-# ==================== НАСТРОЙКИ ====================
-MAX_CHANNELS = 12000
-SOURCE_WORKERS = 25
-CHECK_WORKERS = 100
-CHECK_TIMEOUT = 10.0
-UPDATE_EVERY = 86400
+# ==================== НАСТРОЙКИ МАКСИМУМ ====================
+MAX_CHANNELS = 15000
+SOURCE_WORKERS = 30
+CHECK_WORKERS = 150
+CHECK_TIMEOUT = 40.0           # 40 секунд на канал, как заказано
+UPDATE_EVERY = 86400           # раз в 24 часа
+
+CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD'}
 
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт',
              'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 'Общие']
@@ -88,6 +90,7 @@ stats = {
     "duration_sec": 0,
     "sources_total": 0,
     "playlists_loaded": 0,
+    "api_streams": 0,
     "parsed_channels": 0,
     "alive_channels": 0,
     "categories": {},
@@ -135,15 +138,50 @@ def fetch_ru_regions():
             code = str(reg.get('code', ''))
             if code.upper().startswith('RU-'):
                 urls.append('https://iptv-org.github.io/iptv/regions/' + code.lower() + '.m3u')
-        logger.info(f"API iptv-org: регионов РФ: {len(urls)}")
         return urls
     except Exception:
+        return []
+
+def fetch_iptv_org_api():
+    """ГЛАВНАЯ МОЩЬ: вся база потоков iptv-org, фильтруем по РФ/СНГ/русскому языку.
+    Сохраняем персональные User-Agent и Referer потоков."""
+    try:
+        sess = get_session()
+        ch_r = sess.get("https://iptv-org.github.io/api/channels.json",
+                        timeout=60, headers=HEADERS_WEB)
+        st_r = sess.get("https://iptv-org.github.io/api/streams.json",
+                        timeout=60, headers=HEADERS_WEB)
+        if ch_r.status_code != 200 or st_r.status_code != 200:
+            return []
+        names = {}
+        for ch in ch_r.json():
+            if ch.get('is_nsfw'):
+                continue
+            langs = []
+            for lng in (ch.get('languages') or []):
+                langs.append(lng.get('code') if isinstance(lng, dict) else lng)
+            if ch.get('country') in CIS_COUNTRIES or 'rus' in langs:
+                names[ch.get('id')] = ch.get('name', '')
+        result = []
+        for s in st_r.json():
+            cid = s.get('channel')
+            url = s.get('url')
+            if cid in names and url and url.startswith('http'):
+                result.append({
+                    'url': url,
+                    'name': names[cid],
+                    'ua': s.get('user_agent') or '',
+                    'ref': s.get('http_referrer') or '',
+                })
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка API iptv-org: {e}")
         return []
 
 def fetch_source_text(url):
     for _ in range(2):
         try:
-            r = get_session().get(url, timeout=15, headers=HEADERS_WEB, verify=False)
+            r = get_session().get(url, timeout=20, headers=HEADERS_WEB, verify=False)
             if r.status_code == 200 and r.text:
                 return r.text
             if r.status_code in (404, 410):
@@ -155,7 +193,7 @@ def fetch_source_text(url):
 # ==================== ФИЛЬТРЫ И КАТЕГОРИИ ====================
 def get_category(name):
     n = name.lower()
-    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'о!']):
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
         return 'Детские'
     if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn']):
         return 'Новости'
@@ -163,7 +201,7 @@ def get_category(name):
         return 'Спорт'
     if any(w in n for w in ['кино', 'movie', 'film', 'фильм', 'сериал', 'series', 'cinema', 'tv1000', 'амедиа', 'дом кино']):
         return 'Кино и сериалы'
-    if any(w in n for w in ['музык', 'music', 'radio', 'радио', 'mtv', 'bridge', 'шансон', 'хит fm', 'ретро']):
+    if any(w in n for w in ['музык', 'music', 'radio', 'радио', 'mtv', 'bridge', 'шансон', 'ретро']):
         return 'Музыка'
     if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'культур', 'travel', 'путешеств']):
         return 'Познавательные'
@@ -191,29 +229,38 @@ def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
-# ==================== УМНАЯ ПРОВЕРКА (<= 10 сек) ====================
-def check_one(url):
+# ==================== ПРОВЕРКА (<= 40 сек, с личными заголовками) ====================
+def check_one(ch):
+    url = ch['url']
+    headers = dict(HEADERS_PLAYER)
+    if ch.get('ua'):
+        headers['User-Agent'] = ch['ua']
+    if ch.get('ref'):
+        headers['Referer'] = ch['ref']
+
     session = get_session()
     start = time.monotonic()
 
     def remaining():
         return CHECK_TIMEOUT - (time.monotonic() - start)
 
+    # Быстрый путь: HEAD с хорошим Content-Type
     try:
-        r = session.head(url, timeout=CHECK_TIMEOUT, headers=HEADERS_PLAYER,
+        r = session.head(url, timeout=min(10, CHECK_TIMEOUT), headers=headers,
                          allow_redirects=True, verify=False)
-        if r.status_code < 400 and remaining() > 0:
+        if r.status_code < 400:
             ct = r.headers.get('content-type', '').lower()
             if any(g in ct for g in GOOD_CT):
                 return True
     except Exception:
         pass
 
+    # Основной путь: GET + анализ контента, 2 попытки при сетевых ошибках
     for _ in range(2):
-        if remaining() <= 0.5:
+        if remaining() <= 1:
             return False
         try:
-            r = session.get(url, timeout=remaining(), headers=HEADERS_PLAYER,
+            r = session.get(url, timeout=remaining(), headers=headers,
                             stream=True, allow_redirects=True, verify=False)
         except Exception:
             continue
@@ -246,7 +293,7 @@ def check_one(url):
 
     return False
 
-# ==================== ПАРСЕР (категории ВСЕГДА русские) ====================
+# ==================== ПАРСЕР M3U ====================
 def parse_m3u(text, entries, seen_urls):
     current_inf = ''
     current_name = ''
@@ -263,10 +310,10 @@ def parse_m3u(text, entries, seen_urls):
                     and not is_adult(current_name) and line not in seen_urls):
                 seen_urls.add(line)
                 cat = get_category(current_name)
-                # Вырезаем чужие group-title и ставим свой русский
                 inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
                 inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
-                ch = {'inf': inf, 'url': line, 'cat': cat, 'name': current_name}
+                ch = {'inf': inf, 'url': line, 'cat': cat,
+                      'name': current_name, 'ua': '', 'ref': ''}
                 key = norm_name(current_name)
                 if key in entries:
                     if is_hd(current_name) and not is_hd(entries[key]['name']):
@@ -286,15 +333,20 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: поиск потоков и сбор плейлистов...")
+    logger.info("🔄 Старт: выгрузка базы потоков + сбор плейлистов...")
 
     try:
+        # 1. Прямая выгрузка из API iptv-org
+        api_channels = fetch_iptv_org_api()
+        logger.info(f"API iptv-org: потоков РФ/СНГ: {len(api_channels)}")
+
+        # 2. M3U-источники
         regions = fetch_ru_regions()
         if not regions:
             regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u'
                        for r in FALLBACK_REGIONS]
         sources = list(set(STATIC_SOURCES + regions + fetch_dynamic()))
-        logger.info(f"Всего источников: {len(sources)}")
+        logger.info(f"M3U источников: {len(sources)}")
 
         texts = []
         with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as ex:
@@ -303,17 +355,39 @@ def update_cache():
                     texts.append(txt)
         logger.info(f"Загружено плейлистов: {len(texts)}")
 
+        # 3. Объединяем: сначала API-потоки, потом плейлисты
         entries = {}
         seen = set()
+        for ach in api_channels:
+            name = ach['name']
+            if not name or not is_russian(name) or is_adult(name):
+                continue
+            url = ach['url']
+            if url in seen:
+                continue
+            seen.add(url)
+            cat = get_category(name)
+            inf = '#EXTINF:-1 group-title="' + cat + '",' + name
+            key = norm_name(name)
+            new_ch = {'inf': inf, 'url': url, 'cat': cat,
+                      'name': name, 'ua': ach['ua'], 'ref': ach['ref']}
+            if key in entries:
+                if is_hd(name) and not is_hd(entries[key]['name']):
+                    entries[key] = new_ch
+            else:
+                entries[key] = new_ch
+
         for txt in texts:
             if parse_m3u(txt, entries, seen):
                 break
-        raw = list(entries.values())
-        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 10 сек)...")
 
+        raw = list(entries.values())
+        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
+
+        # 4. Массовая проверка
         alive = []
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
-            futs = {ex.submit(check_one, ch['url']): ch for ch in raw}
+            futs = {ex.submit(check_one, ch): ch for ch in raw}
             for f in as_completed(futs):
                 ch = futs[f]
                 try:
@@ -334,8 +408,8 @@ def update_cache():
 
         lines = [
             '#EXTM3U',
-            '# IPTV Russia Pro | ' + time.strftime('%Y-%m-%d %H:%M'),
-            '# Живых каналов: ' + str(len(alive)) + ' | отклик <= 10 сек | без 18+',
+            '# IPTV Russia Pro MAX | ' + time.strftime('%Y-%m-%d %H:%M'),
+            '# Живых каналов: ' + str(len(alive)) + ' | отклик <= 40 сек | без 18+',
         ]
         for ch in alive:
             lines.append(ch['inf'])
@@ -349,6 +423,7 @@ def update_cache():
                 'duration_sec': round(elapsed, 1),
                 'sources_total': len(sources),
                 'playlists_loaded': len(texts),
+                'api_streams': len(api_channels),
                 'parsed_channels': len(raw),
                 'alive_channels': len(alive),
                 'categories': dict(cat_counts),
@@ -376,7 +451,7 @@ threading.Thread(target=background_worker, daemon=True).start()
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro</title>
+<title>IPTV Russia Pro MAX</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -390,15 +465,15 @@ h1{margin:0 0 8px;font-size:32px}
 .stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷🇺 IPTV Russia Pro</h1>
-<div class="sub">Автопоиск потоков • проверка каждого канала • обновление раз в 24 ч</div>
+<h1>🇷🇺 IPTV Russia Pro MAX</h1>
+<div class="sub">База iptv-org API + автопоиск плейлистов • проверка 40 сек • обновление раз в 24 ч</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
 <div class="stats">
 <div class="stat"><b>__ALIVE__</b><span>живых каналов</span></div>
 <div class="stat"><b>__PARSED__</b><span>проверено</span></div>
-<div class="stat"><b>__SOURCES__</b><span>источников</span></div>
+<div class="stat"><b>__API__</b><span>потоков из API</span></div>
 <div class="stat"><b>__DURATION__</b><span>сек. проверки</span></div>
 </div>
 <div class="sub">Обновлено: __UPDATED__</div>
@@ -416,7 +491,7 @@ def home():
     page = HOME_TEMPLATE
     page = page.replace('__ALIVE__', str(s.get('alive_channels', 0)))
     page = page.replace('__PARSED__', str(s.get('parsed_channels', 0)))
-    page = page.replace('__SOURCES__', str(s.get('sources_total', 0)))
+    page = page.replace('__API__', str(s.get('api_streams', 0)))
     page = page.replace('__DURATION__', str(s.get('duration_sec', 0)))
     page = page.replace('__UPDATED__', str(s.get('last_update') or 'ещё идёт первая проверка...'))
     page = page.replace('__CATS__', cat_html)
@@ -427,7 +502,7 @@ def home():
 def playlist():
     with cache_lock:
         resp = Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
-        resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_pro.m3u"'
+        resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
         resp.headers['Cache-Control'] = 'public, max-age=3600'
         return resp
 
