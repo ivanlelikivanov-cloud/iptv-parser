@@ -15,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# ==================== СТАТИКА ====================
+# ==================== СТАТИКА (РАСШИРЕНА) ====================
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
@@ -25,6 +25,15 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/languages/chv.m3u",
     "https://iptv-org.github.io/iptv/languages/udm.m3u",
     "https://iptv-org.github.io/iptv/languages/sah.m3u",
+    "https://iptv-org.github.io/iptv/languages/bel.m3u",
+    "https://iptv-org.github.io/iptv/languages/kaz.m3u",
+    "https://iptv-org.github.io/iptv/languages/uzb.m3u",
+    "https://iptv-org.github.io/iptv/languages/kir.m3u",
+    "https://iptv-org.github.io/iptv/languages/tgk.m3u",
+    "https://iptv-org.github.io/iptv/languages/arm.m3u",
+    "https://iptv-org.github.io/iptv/languages/aze.m3u",
+    "https://iptv-org.github.io/iptv/languages/rum.m3u",
+    "https://iptv-org.github.io/iptv/languages/kat.m3u",
     "https://iptv-org.github.io/iptv/countries/by.m3u",
     "https://iptv-org.github.io/iptv/countries/kz.m3u",
     "https://iptv-org.github.io/iptv/countries/kg.m3u",
@@ -37,13 +46,12 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/il.m3u",
     "https://iptv-org.github.io/iptv/countries/de.m3u",
     "https://iptv-org.github.io/iptv/countries/us.m3u",
-    # ГЛОБАЛЬНЫЙ ИНДЕКС: все каналы мира, кириллица отфильтрует русские
     "https://iptv-org.github.io/iptv/index.m3u",
+    # Дополнительные категории iptv-org
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
     "https://iptv-org.github.io/iptv/categories/kids.m3u",
-    "https://iptv-org.github.io/iptv/categories/music.m3u",
     "https://iptv-org.github.io/iptv/categories/documentary.m3u",
     "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
     "https://iptv-org.github.io/iptv/categories/general.m3u",
@@ -56,17 +64,30 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/categories/series.m3u",
     "https://iptv-org.github.io/iptv/categories/animation.m3u",
     "https://iptv-org.github.io/iptv/categories/religious.m3u",
+    "https://iptv-org.github.io/iptv/categories/cooking.m3u",
+    "https://iptv-org.github.io/iptv/categories/health.m3u",
+    "https://iptv-org.github.io/iptv/categories/hobby.m3u",
+    "https://iptv-org.github.io/iptv/categories/home.m3u",
+    "https://iptv-org.github.io/iptv/categories/business.m3u",
+    "https://iptv-org.github.io/iptv/categories/relax.m3u",
+    "https://iptv-org.github.io/iptv/categories/science.m3u",
+    # Сторонние стабильные плейлисты
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/index.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
+    "https://raw.githubusercontent.com/smolnp/IPTVru/main/IPTVru.m3u",
+    "https://smolnp.github.io/IPTVru/IPTVru.m3u",
     "https://m3u.su/m3u/sng.m3u",
     "https://m3u.su/m3u/ru.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://webarmen.com/webarmen/my/iptv/auto.m3u",
 ]
 
-# ==================== АГРЕГАТОРЫ И ФОРУМЫ (типа m3u.su) ====================
+# ==================== АГРЕГАТОРЫ И ФОРУМЫ ====================
 HTML_SOURCES = [
     "https://m3u.su/",
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
@@ -74,7 +95,9 @@ HTML_SOURCES = [
     "https://6x6.msk.ru/",
     "https://homtv.ru/",
     "https://iptv-rus.com/",
+    "https://iptv-rus.com/playlists/",
     "https://pikniktv.info/viewtopic.php?t=6737",
+    "https://pikniktv.info/viewforum.php?f=328",
     "https://webarmen.com/my/iptv/",
     "https://go2tv.top/",
     "https://iptv.one/",
@@ -83,6 +106,15 @@ HTML_SOURCES = [
     "https://iptv-live.ru/",
     "https://iptv-tv.ru/",
     "https://iptv-russia.online/",
+    "https://vse-tv.net/playlists.html",
+    "https://forumtv.org/",
+    "https://webos-forums.ru/post167674.html",
+    "https://www.free-codecs.com/guides/free-popular-iptv-playlist.htm",
+    "https://github.com/iptv-org/iptv",
+    "https://github.com/Free-iptv/iptv",
+    "https://github.com/4mirror/iptv",
+    "https://github.com/hmlendea/iptv-playlist-aggregator",
+    "https://pskovline.tv/tvm3u.php",
 ]
 
 FALLBACK_REGIONS = [
@@ -101,15 +133,17 @@ GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
 PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
 WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
                'iptv m3u8 ru бесплатно', 'site:t.me iptv m3u',
-               'iptv плейлист форум бесплатно 2026']
+               'iptv плейлист форум бесплатно 2026',
+               'm3u плейлист тв бесплатно скачать', 'агрегатор iptv плейлистов сайт']
 TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru',
                'iptv_playlist', 'm3u_playlist', 'iptvfree', 'tv_playlist',
                'iptv_rf', 'playlist_iptv', 'iptv_su', 'free_iptv_ru',
-               'iptv_list', 'ru_iptv', 'iptv_tv_ru']
+               'iptv_list', 'ru_iptv', 'iptv_tv_ru', 'russia_iptv',
+               'iptv_2026', 'm3u8ru', 'iptv_playlist_ru', 'tv_m3u', 'iptvhub_ru']
 
 # ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 20000
-MAX_EXTRA_SOURCES = 150
+MAX_EXTRA_SOURCES = 200
 MAX_CHECK_POOL = 5000
 SOURCE_WORKERS = 20
 CHECK_WORKERS = 80
@@ -147,7 +181,6 @@ HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
 
-# ==================== ДИСКОВЫЙ КЭШ (анти-сброс в 0) ====================
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'playlist_disk.m3u')
 
 def load_disk_cache():
@@ -172,7 +205,6 @@ def save_disk_cache(data):
     except Exception:
         pass
 
-# ==================== KEEPALIVE (не даёт Render усыпить инстанс) ====================
 SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
 
 def keepalive_worker():
@@ -180,7 +212,6 @@ def keepalive_worker():
         time.sleep(KEEPALIVE_SEC)
         try:
             requests.get(SELF_URL + '/health', timeout=10)
-            logger.debug("keepalive ping ok")
         except Exception:
             pass
 
@@ -196,7 +227,7 @@ def get_session():
         _thread_local.session = s
     return s
 
-# ==================== ФИЛЬТРЫ ====================
+# ==================== ФИЛЬТРЫ И СЛОВАРИ ====================
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -218,6 +249,15 @@ PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment
                         'абонент'])
 
 BLACKLIST_WORDS = _clean(['fifa', 'world cup', 'чемпионат мира', 'плей-офф'])
+
+# Дополнительный строгий блок для исключения радиостанций
+RADIO_WORDS = _clean([
+    'радио', 'radio', 'fm', 'ржд', 'дорожное радио', 'авторадио', 'ретро fm',
+    'еуропа плюс', 'europa plus', 'шансон', 'москва fm', 'комсомольская правда',
+    'dfm', 'monte carlo', 'maximum', 'record', 'радио рекорд', 'energy',
+    'радио энергия', 'relax fm', 'детское радио', 'юмор fm', 'كوم', 'azadliq',
+    'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant', 'kommersant fm'
+])
 
 # ==================== РАЗВЕДКА ====================
 def fetch_dynamic():
@@ -264,7 +304,6 @@ def fetch_github():
         except Exception:
             continue
     repos = list(dict.fromkeys(repos))[:40]
-    logger.info(f"GitHub: репозиториев: {len(repos)}")
 
     found = set()
 
@@ -372,7 +411,6 @@ def fetch_web_search():
     with ThreadPoolExecutor(max_workers=10) as ex:
         for links in ex.map(scrape, pages[:25]):
             m3u.update(links)
-    logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
     return list(m3u)
 
 def fetch_telegram():
@@ -384,7 +422,6 @@ def fetch_telegram():
                 found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
         except Exception:
             continue
-    logger.info(f"Telegram: ссылок: {len(found)}")
     return list(found)
 
 def fetch_iptv_org_api():
@@ -401,6 +438,9 @@ def fetch_iptv_org_api():
             if ch.get('is_nsfw'):
                 continue
             if ch.get('country') == 'UA':
+                continue
+            # Исключаем радио через поле категории в самом API, если она там есть
+            if ch.get('category') == 'radio':
                 continue
             langs = []
             for lng in (ch.get('languages') or []):
@@ -432,7 +472,7 @@ def fetch_source_text(url):
         pass
     return None
 
-# ==================== ЛОГИКА ФИЛЬТРОВ ====================
+# ==================== ФИЛЬТРАЦИЯ С УЧЕТОМ РАДИО ====================
 def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli']):
@@ -443,7 +483,8 @@ def get_category(name):
         return 'Спорт'
     if any(w in n for w in ['кино', 'movie', 'film', 'фильм', 'сериал', 'series', 'cinema', 'tv1000', 'амедиа', 'дом кино']):
         return 'Кино и сериалы'
-    if any(w in n for w in ['музык', 'music', 'radio', 'радио', 'mtv', 'bridge', 'шансон', 'ретро']):
+    # Категорию Музыка оставляем для музыкальных ТВ-каналов (типа MTV, Bridge TV), а радио отсеивается на этапе reject_reason
+    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон тв', 'рутв', 'ru.tv']):
         return 'Музыка'
     if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'культур', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз']):
         return 'Познавательные'
@@ -469,6 +510,16 @@ def is_paywall(name):
         return True
     return False
 
+def is_radio(name):
+    n = name.lower()
+    # Проверяем на вхождение ключевых слов радио
+    if any(w in n for w in RADIO_WORDS):
+        return True
+    # Дополнительно отсекаем потоки, где явно написано "радио" или "fm" (как отдельное слово)
+    if re.search(r'\bfm\b', n) or 'радиостанция' in n:
+        return True
+    return False
+
 def is_russian(name):
     return bool(re.search(r'[\u0400-\u04FF]', name))
 
@@ -481,6 +532,8 @@ def reject_reason(name):
         return 'ua'
     if is_paywall(name):
         return 'paywall'
+    if is_radio(name):
+        return 'radio'
     return None
 
 def norm_name(name):
@@ -605,7 +658,7 @@ def flush_playlist(alive, elapsed=None):
     lines = [
         '#EXTM3U',
         '# IPTV Russia Pro MAX | ' + time.strftime('%Y-%m-%d %H:%M'),
-        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без подписок',
+        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без радио | без подписок',
     ]
     for ch in alive_sorted:
         lines.append(ch['inf'])
@@ -627,11 +680,11 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG (без радио)...")
 
     try:
         api_channels = fetch_iptv_org_api()
-        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA): {len(api_channels)}")
+        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/Радио): {len(api_channels)}")
 
         regions = fetch_ru_regions()
         if not regions:
@@ -745,7 +798,6 @@ def background_worker():
         logger.info(f"Следующая попытка через {wait // 60} мин")
         time.sleep(wait)
 
-# Восстанавливаем плейлист с диска ДО старта потоков
 load_disk_cache()
 threading.Thread(target=background_worker, daemon=True).start()
 threading.Thread(target=keepalive_worker, daemon=True).start()
@@ -777,8 +829,8 @@ h1{margin:0 0 8px;font-size:32px}
 .stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">Форумы + TG + 8 платформ • Дисковый кэш • Keepalive</div>
+<h1>🇷🇺 IPTV Russia Pro MAX</h1>
+<div class="sub">70+ источников • Форумы + TG + 8 платформ • Без радиостанций</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
