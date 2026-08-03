@@ -15,7 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# ==================== СТАТИКА ====================
+# ==================== СТАТИКА (расширена) ====================
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
@@ -33,6 +33,7 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/az.m3u",
     "https://iptv-org.github.io/iptv/countries/ge.m3u",
     "https://iptv-org.github.io/iptv/countries/md.m3u",
+    "https://iptv-org.github.io/iptv/countries/tj.m3u",
     "https://iptv-org.github.io/iptv/categories/news.m3u",
     "https://iptv-org.github.io/iptv/categories/movies.m3u",
     "https://iptv-org.github.io/iptv/categories/sports.m3u",
@@ -41,6 +42,17 @@ STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/categories/documentary.m3u",
     "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
     "https://iptv-org.github.io/iptv/categories/general.m3u",
+    "https://iptv-org.github.io/iptv/categories/family.m3u",
+    "https://iptv-org.github.io/iptv/categories/culture.m3u",
+    "https://iptv-org.github.io/iptv/categories/education.m3u",
+    "https://iptv-org.github.io/iptv/categories/food.m3u",
+    "https://iptv-org.github.io/iptv/categories/travel.m3u",
+    "https://iptv-org.github.io/iptv/categories/comedy.m3u",
+    "https://iptv-org.github.io/iptv/categories/series.m3u",
+    "https://iptv-org.github.io/iptv/categories/animation.m3u",
+    "https://iptv-org.github.io/iptv/categories/lifestyle.m3u",
+    "https://iptv-org.github.io/iptv/categories/outdoor.m3u",
+    "https://iptv-org.github.io/iptv/categories/weather.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
@@ -71,21 +83,26 @@ FALLBACK_REGIONS = [
     "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
-GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv']
+GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist',
+                  'topic:iptv', 'm3u8 ru', 'iptv m3u russia']
 GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
                    'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
 PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
-WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia']
+WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
+               'iptv m3u8 ru бесплатно', 'плейлист тв каналов m3u']
 TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru']
 
-# ==================== НАСТРОЙКИ (щадящие для free-тарифа) ====================
+# ===== СВОЙ ЧЁРНЫЙ СПИСОК: впиши слова из названий каналов-подписок =====
+BLACKLIST_WORDS = []
+
+# ==================== НАСТРОЙКИ ====================
 MAX_CHANNELS = 15000
 SOURCE_WORKERS = 25
 CHECK_WORKERS = 80
 CHECK_TIMEOUT = 40.0
 UPDATE_EVERY = 86400
 
-CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD'}
+CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт',
              'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 'Общие']
@@ -167,7 +184,7 @@ def fetch_github():
                         repos.append((full, branch))
         except Exception:
             continue
-    repos = list(dict.fromkeys(repos))[:50]
+    repos = list(dict.fromkeys(repos))[:60]
     logger.info(f"GitHub: репозиториев: {len(repos)}")
 
     found = set()
@@ -303,6 +320,8 @@ def fetch_iptv_org_api():
         for ch in ch_r.json():
             if ch.get('is_nsfw'):
                 continue
+            if ch.get('country') == 'UA':
+                continue  # украинские каналы не нужны
             langs = []
             for lng in (ch.get('languages') or []):
                 langs.append(lng.get('code') if isinstance(lng, dict) else lng)
@@ -362,6 +381,27 @@ def is_adult(name):
     bad = ['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эротика', 'порно', 'nude', 'playboy']
     return any(w in n for w in bad)
 
+def is_ukrainian(name):
+    n = name.lower()
+    ua = ['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ', 'львів', 'львов',
+          'харків', 'дніпро', 'одеса', 'суспільне', 'суспильне', 'прямий', 'тсн',
+          '1+1', '2+2', 'інтер', 'inter ua', 'верес', 'тоніс', 'тонис',
+          'ua: ', 'ua |', '| ua', ' ukraine', 'украинск']
+    return any(w in n for w in ua)
+
+def is_paywall(name):
+    """Каналы-подписки, реклама платных сервисов, магазины"""
+    n = name.lower()
+    bad = ['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
+           'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
+           'магазин', 'shop', 'store', 'premium', 'премиум', 'vip', 'вип',
+           'ppv', 'pay per view', 'активация', '💳', '💰', '🛒', '💵', '💸']
+    if any(w in n for w in bad):
+        return True
+    if BLACKLIST_WORDS and any(w.lower() in n for w in BLACKLIST_WORDS):
+        return True
+    return False
+
 def is_russian(name):
     return bool(re.search(r'[\u0400-\u04FF]', name))
 
@@ -374,6 +414,10 @@ def norm_name(name):
 def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
+
+def name_ok(name):
+    return (is_russian(name) and not is_adult(name)
+            and not is_ukrainian(name) and not is_paywall(name))
 
 # ==================== ПРОВЕРКА (<= 40 сек) ====================
 def check_one(ch):
@@ -450,8 +494,7 @@ def parse_m3u(text, entries, seen_urls):
             m = re.search(r',\s*(.+)$', line)
             current_name = m.group(1).strip() if m else ''
         elif line.startswith('http'):
-            if (current_name and is_russian(current_name)
-                    and not is_adult(current_name) and line not in seen_urls):
+            if current_name and name_ok(current_name) and line not in seen_urls:
                 seen_urls.add(line)
                 cat = get_category(current_name)
                 inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
@@ -477,11 +520,11 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ...")
+    logger.info("🔄 Старт: разведка ВСЕХ платформ (без UA, без подписок)...")
 
     try:
         api_channels = fetch_iptv_org_api()
-        logger.info(f"API iptv-org: потоков РФ/СНГ: {len(api_channels)}")
+        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA): {len(api_channels)}")
 
         regions = fetch_ru_regions()
         if not regions:
@@ -504,7 +547,7 @@ def update_cache():
         seen = set()
         for ach in api_channels:
             name = ach['name']
-            if not name or not is_russian(name) or is_adult(name):
+            if not name or not name_ok(name):
                 continue
             url = ach['url']
             if url in seen:
@@ -526,7 +569,7 @@ def update_cache():
                 break
 
         raw = list(entries.values())
-        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек)...")
+        logger.info(f"Уникальных каналов (после фильтров): {len(raw)}. Проверка (<= 40 сек)...")
 
         alive = []
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
@@ -552,7 +595,7 @@ def update_cache():
         lines = [
             '#EXTM3U',
             '# IPTV Russia Pro MAX | ' + time.strftime('%Y-%m-%d %H:%M'),
-            '# Живых каналов: ' + str(len(alive)) + ' | отклик <= 40 сек | без 18+',
+            '# Живых каналов: ' + str(len(alive)) + ' | без 18+ | без UA | без подписок',
         ]
         for ch in alive:
             lines.append(ch['inf'])
@@ -590,7 +633,7 @@ def background_worker():
 
 threading.Thread(target=background_worker, daemon=True).start()
 
-# ==================== ВЕБ (404 НЕВОЗМОЖЕН) ====================
+# ==================== ВЕБ (404 невозможен) ====================
 def make_playlist_response():
     with cache_lock:
         data = playlist_cache
@@ -617,7 +660,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX</h1>
-<div class="sub">GitHub • GitLab • Bitbucket • Codeberg • Gitea • Web • TG • iptv-org</div>
+<div class="sub">Без 18+ • Без UA • Без каналов-подписок • 8 платформ-источников</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
@@ -679,7 +722,6 @@ def refresh():
 
 @app.route('/<path:any_path>')
 def fallback(any_path):
-    """ЛЮБОЙ другой путь: если похоже на плейлист — отдаём плейлист, иначе главная"""
     p = any_path.lower()
     if p.endswith(('.m3u', '.m3u8')) or 'playlist' in p or 'm3u' in p:
         return make_playlist_response()
