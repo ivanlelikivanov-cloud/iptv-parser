@@ -171,6 +171,9 @@ RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 10
 HEARTBEAT_SEC = 20
 KEEPALIVE_SEC = 60
+SWEEP_EVERY = 3600
+SWEEP_TIMEOUT = 15.0
+SWEEP_WORKERS = 30
 MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
 NB_P_MIN = 0.25
@@ -184,6 +187,7 @@ CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериа
 
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro — идёт первая проверка каналов...\n"
 alive_list = []
+DEAD_ONCE = set()
 cache_lock = threading.Lock()
 is_updating = False
 stats = {
@@ -191,6 +195,7 @@ stats = {
     "playlists_loaded": 0, "api_streams": 0, "parsed_channels": 0,
     "alive_channels": 0, "filtered": {}, "categories": {},
     "ml_samples": 0, "ml_accuracy": 0.0, "ml_on": True, "nb_moved": 0,
+    "last_sweep": None, "sweep_removed": 0,
 }
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -509,7 +514,6 @@ LATIN_RU_WORDS = _clean([
     'tv center', 'telekanal', '360', '8 kanal', 'shanson tv', 'retro tv',
     'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
     'kinopoisk', 'illuzion'])
-# Гео/платные заглушки по URL (Wink и подобные OTT)
 BAD_URL_WORDS = _clean(['wink.ru', 'wink.', 'okko.tv', 'ivi.ru', 'more.tv',
                         'kion.ru', 'start.ru', 'premier.one', 'geoblock', 'geo-block'])
 
@@ -901,11 +905,11 @@ def parse_m3u(text, entries, seen_urls, reasons):
             current_name = ''
     return False
 
-def flush_playlist(alive, elapsed=None):
+def flush_playlist(alive, elapsed=None, replace=False):
     global playlist_cache, alive_list
     with cache_lock:
         current = list(alive_list)
-    if elapsed is None and current:
+    if elapsed is None and not replace and current:
         have = set(c['url'] for c in current)
         merged = current
         for ch in alive:
@@ -992,6 +996,59 @@ def quick_seed():
         flush_playlist(alive)
         logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
     return alive
+
+# ==================== 🩺 ЕЖЕЧАСНАЯ ПРОВЕРКА ЗДОРОВЬЯ ====================
+def health_sweep():
+    """Перепроверяет текущий плейлист: мёртвые (2 раза подряд) вылетают"""
+    with cache_lock:
+        snapshot = list(alive_list)
+    if not snapshot or is_updating:
+        return
+    logger.info(f"🩺 Проверка здоровья: {len(snapshot)} каналов...")
+    survivors = []
+    dead = 0
+    ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
+    futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT): ch for ch in snapshot}
+    try:
+        for f in as_completed(futs.keys(), timeout=600):
+            ch = futs[f]
+            try:
+                ok = bool(f.result())
+            except Exception:
+                ok = False
+            if ok:
+                survivors.append(ch)
+                DEAD_ONCE.discard(ch['url'])
+            else:
+                if ch['url'] in DEAD_ONCE:
+                    dead += 1
+                else:
+                    DEAD_ONCE.add(ch['url'])
+                    survivors.append(ch)
+            brain.record(ch.get('host', urlparse(ch['url']).netloc), ok)
+    except TimeoutError:
+        logger.warning("⏳ Таймаут проверки здоровья")
+    except Exception as e:
+        logger.error(f"Ошибка проверки здоровья: {e}")
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+    if dead and survivors:
+        flush_playlist(survivors, replace=True)
+    with cache_lock:
+        stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        stats['sweep_removed'] = dead
+    logger.info(f"🩺 Итог: живо {len(survivors)}, умерло {dead}")
+
+def sweep_worker():
+    while True:
+        time.sleep(SWEEP_EVERY)
+        try:
+            health_sweep()
+        except Exception as e:
+            logger.exception(f"🩺 Ошибка свипа: {e}")
 
 def update_cache():
     global playlist_cache, is_updating
@@ -1176,7 +1233,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">⚡ Быстрый старт • Нейронка • Ирочка • без Wink/гео-заглушек</div>
+<div class="sub">⚡ Быстрый старт • 🩺 ежечасная проверка • Ирочка • без Wink</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
@@ -1261,6 +1318,7 @@ if __name__ == '__main__':
     load_disk_cache()
     threading.Thread(target=background_worker, daemon=True).start()
     threading.Thread(target=keepalive_worker, daemon=True).start()
+    threading.Thread(target=sweep_worker, daemon=True).start()
     try:
         from waitress import serve
         serve(app, host='0.0.0.0', port=port, threads=8)
