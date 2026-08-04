@@ -290,7 +290,6 @@ class CategoryNB:
             acc = 0.0
             for t in toks:
                 acc += math.log((d.get(t, 0) + 1) / tt)
-            # 🧠 МОЗГИ: решают СЛОВА, размер категории — лишь лёгкая подсказка
             scores[cat] = acc / len(toks) + NB_PRIOR * math.log(docs / total_docs)
         mx = max(scores.values())
         exps = {c: math.exp((v - mx) / NB_TEMP) for c, v in scores.items()}
@@ -757,7 +756,7 @@ def fetch_source_text(url):
 
 def get_category(name):
     n = name.lower()
-    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'том и', 'богатыр', 'алёша', 'трёшка']):
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'богатыр', 'алёша', 'трёшка']):
         return 'Детские'
     if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
         return 'Новости'
@@ -998,9 +997,6 @@ def quick_seed():
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
-    if alive:
-        flush_playlist(alive)
-        logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
     return alive
 
 def health_sweep():
@@ -1060,12 +1056,25 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG + ML + Ирочка...")
+    logger.info("🔄 Старт: разведка + накопление (мастер-список не сбрасывается)...")
     try:
-        seed_alive = quick_seed()
-        alive = list(seed_alive)
+        # 📈 МАСТЕР-СПИСОК: стартуем от текущего плейлиста, а не с нуля
+        with cache_lock:
+            alive = list(alive_list)
         alive_urls = set(ch['url'] for ch in alive)
         alive_names = set(norm_name(ch['name']) for ch in alive)
+
+        for ch in quick_seed():
+            if ch['url'] not in alive_urls:
+                nk = norm_name(ch['name'])
+                if nk in alive_names:
+                    continue
+                alive_names.add(nk)
+                alive_urls.add(ch['url'])
+                alive.append(ch)
+        if alive:
+            flush_playlist(alive)
+
         entries = {}
         seen = set()
         reasons = Counter()
@@ -1149,10 +1158,11 @@ def update_cache():
             stats['playlists_loaded'] = loaded
             stats['api_streams'] = len(api_channels)
             stats['parsed_channels'] = len(raw)
-        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
+        logger.info(f"Уникальных кандидатов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
         samples = []
         since_flush = 0
         checked = 0
+        added = 0
         last_beat = time.time()
         ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
         futs = {ex.submit(check_one, ch): ch for ch in raw}
@@ -1166,22 +1176,22 @@ def update_cache():
                     ok = False
                 if ok and ch['url'] not in alive_urls:
                     nk = norm_name(ch['name'])
-                    if nk in alive_names:
-                        continue
-                    alive_names.add(nk)
-                    alive_urls.add(ch['url'])
-                    alive.append(ch)
-                    since_flush += 1
-                    if since_flush >= FLUSH_EVERY:
-                        flush_playlist(alive)
-                        since_flush = 0
+                    if nk not in alive_names:
+                        alive_names.add(nk)
+                        alive_urls.add(ch['url'])
+                        alive.append(ch)
+                        added += 1
+                        since_flush += 1
+                        if since_flush >= FLUSH_EVERY:
+                            flush_playlist(alive)
+                            since_flush = 0
                 samples.append((ch['feats'], 1 if ok else 0))
                 brain.record(ch['host'], ok)
                 if time.time() - last_beat > HEARTBEAT_SEC:
-                    logger.info(f"Прогресс проверки: {checked}/{len(raw)}, живых: {len(alive)}")
+                    logger.info(f"Прогресс: {checked}/{len(raw)}, всего в плейлисте: {len(alive)} (+{added} новых)")
                     last_beat = time.time()
         except TimeoutError:
-            logger.warning(f"⏳ Таймаут фазы проверки ({CHECK_PHASE_MAX}с), фиксирую: {len(alive)} живых")
+            logger.warning(f"⏳ Таймаут фазы проверки ({CHECK_PHASE_MAX}с)")
         except Exception as e:
             logger.error(f"Ошибка фазы проверки: {e}")
         finally:
@@ -1196,7 +1206,7 @@ def update_cache():
             stats['ml_accuracy'] = round(brain.last_accuracy, 3)
         elapsed = time.time() - start
         flush_playlist(alive, elapsed=elapsed)
-        logger.info(f"✅ Готово: {len(alive)} живых из {len(raw)} за {elapsed:.0f} сек")
+        logger.info(f"✅ Готово: в плейлисте {len(alive)} (добавлено {added}) за {elapsed:.0f} сек")
     except Exception as e:
         logger.exception(f"КРИТИЧЕСКАЯ ошибка обновления: {e}")
     finally:
@@ -1242,7 +1252,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">⚡ Быстрый старт • 🩺 ежечасная проверка • Ирочка с мозгами • без дублей</div>
+<div class="sub">📈 Накопительный плейлист • 🩺 ежечасная чистка • Ирочка с мозгами</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
