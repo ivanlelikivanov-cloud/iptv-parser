@@ -179,6 +179,7 @@ MAX_HTML_BYTES = 524_288
 NB_P_MIN = 0.25
 NB_MARGIN = 0.08
 NB_TEMP = 0.5
+NB_PRIOR = 0.15
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -284,13 +285,13 @@ class CategoryNB:
         total_docs = sum(self.docs.values())
         scores = {}
         for cat, docs in self.docs.items():
-            s = math.log(docs / total_docs)
             tt = self.tot.get(cat, 0) + V
             d = self.tok.get(cat, {})
             acc = 0.0
             for t in toks:
                 acc += math.log((d.get(t, 0) + 1) / tt)
-            scores[cat] = s + acc / len(toks)
+            # 🧠 МОЗГИ: решают СЛОВА, размер категории — лишь лёгкая подсказка
+            scores[cat] = acc / len(toks) + NB_PRIOR * math.log(docs / total_docs)
         mx = max(scores.values())
         exps = {c: math.exp((v - mx) / NB_TEMP) for c, v in scores.items()}
         tot = sum(exps.values())
@@ -491,7 +492,9 @@ UA_WORDS = _clean(['україн', 'украина', 'україна', 'kyiv', '
                    'львів', 'львов', 'харків', 'дніпро', 'одеса', 'суспільне',
                    'суспильне', 'прямий', 'тсн', '1+1', '2+2', 'інтер',
                    'inter ua', 'верес', 'тоніс', 'тонис', 'ua: ', 'ua |',
-                   '| ua', ' ukraine', 'украинск', '5 kanal'])
+                   '| ua', ' ukraine', 'украинск', '5 kanal',
+                   'надія', 'новий', 'перший', 'ранок', 'мова', 'тб',
+                   'нація', 'світ тв', 'люд', 'країна'])
 PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment', 'купить',
                         'продаж', 'whatsapp', 'telegram', 't.me', 'promo',
                         'реклам', 'advert', 'магазин', 'shop', 'store',
@@ -754,7 +757,7 @@ def fetch_source_text(url):
 
 def get_category(name):
     n = name.lower()
-    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby']):
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'том и', 'богатыр', 'алёша', 'трёшка']):
         return 'Детские'
     if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
         return 'Новости'
@@ -911,10 +914,13 @@ def flush_playlist(alive, elapsed=None, replace=False):
         current = list(alive_list)
     if elapsed is None and not replace and current:
         have = set(c['url'] for c in current)
+        have_names = set(norm_name(c['name']) for c in current)
         merged = current
         for ch in alive:
-            if ch['url'] not in have:
+            nk = norm_name(ch['name'])
+            if ch['url'] not in have and nk not in have_names:
                 have.add(ch['url'])
+                have_names.add(nk)
                 merged.append(ch)
         alive = merged
     def sort_key(ch):
@@ -997,9 +1003,7 @@ def quick_seed():
         logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
     return alive
 
-# ==================== 🩺 ЕЖЕЧАСНАЯ ПРОВЕРКА ЗДОРОВЬЯ ====================
 def health_sweep():
-    """Перепроверяет текущий плейлист: мёртвые (2 раза подряд) вылетают"""
     with cache_lock:
         snapshot = list(alive_list)
     if not snapshot or is_updating:
@@ -1061,6 +1065,7 @@ def update_cache():
         seed_alive = quick_seed()
         alive = list(seed_alive)
         alive_urls = set(ch['url'] for ch in alive)
+        alive_names = set(norm_name(ch['name']) for ch in alive)
         entries = {}
         seen = set()
         reasons = Counter()
@@ -1160,6 +1165,10 @@ def update_cache():
                 except Exception:
                     ok = False
                 if ok and ch['url'] not in alive_urls:
+                    nk = norm_name(ch['name'])
+                    if nk in alive_names:
+                        continue
+                    alive_names.add(nk)
                     alive_urls.add(ch['url'])
                     alive.append(ch)
                     since_flush += 1
@@ -1233,7 +1242,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">⚡ Быстрый старт • 🩺 ежечасная проверка • Ирочка • без Wink</div>
+<div class="sub">⚡ Быстрый старт • 🩺 ежечасная проверка • Ирочка с мозгами • без дублей</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
