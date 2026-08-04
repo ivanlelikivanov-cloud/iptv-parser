@@ -173,7 +173,9 @@ HEARTBEAT_SEC = 20
 KEEPALIVE_SEC = 60
 MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
-NB_CONFIDENCE = 0.45
+NB_P_MIN = 0.25
+NB_MARGIN = 0.08
+NB_TEMP = 0.5
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -201,7 +203,8 @@ GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
 BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'forbidden', 'captcha', 'cloudflare', 'access denied',
                  'denied', 'trebuetsya', 'оплат', 'заблокирован',
-                 'ограничен', 'недоступен', 'роскомнадзор']
+                 'ограничен', 'недоступен', 'роскомнадзор',
+                 'не показывает', 'на этой территории', 'territory']
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -268,10 +271,10 @@ class CategoryNB:
             pass
     def predict(self, name):
         if not self.docs:
-            return None, 0.0
+            return None, 0.0, 0.0
         toks = self.tokens(name)
         if not toks:
-            return None, 0.0
+            return None, 0.0, 0.0
         V = self.vocab + 1
         total_docs = sum(self.docs.values())
         scores = {}
@@ -284,10 +287,12 @@ class CategoryNB:
                 acc += math.log((d.get(t, 0) + 1) / tt)
             scores[cat] = s + acc / len(toks)
         mx = max(scores.values())
-        exps = {c: math.exp(v - mx) for c, v in scores.items()}
+        exps = {c: math.exp((v - mx) / NB_TEMP) for c, v in scores.items()}
         tot = sum(exps.values())
-        best = max(exps, key=exps.get)
-        return best, exps[best] / tot
+        order = sorted(((e / tot, c) for c, e in exps.items()), reverse=True)
+        p1 = order[0][0]
+        p2 = order[1][0] if len(order) > 1 else 0.0
+        return order[0][1], p1, p2
 
 cat_nb = CategoryNB()
 cat_nb.load()
@@ -296,8 +301,8 @@ def apply_nb(ch_list):
     moved = 0
     for ch in ch_list:
         if ch['cat'] == 'Общие':
-            pred, conf = cat_nb.predict(ch['name'])
-            if pred and conf >= NB_CONFIDENCE:
+            pred, p1, p2 = cat_nb.predict(ch['name'])
+            if pred and p1 >= NB_P_MIN and (p1 - p2) >= NB_MARGIN:
                 ch['cat'] = pred
                 ch['inf'] = ch['inf'].replace('group-title="Общие"', 'group-title="' + pred + '"')
                 moved += 1
@@ -486,7 +491,7 @@ PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment
                         'продаж', 'whatsapp', 'telegram', 't.me', 'promo',
                         'реклам', 'advert', 'магазин', 'shop', 'store',
                         'premium', 'премиум', 'vip', 'вип', 'ppv',
-                        'pay per view', 'активация', 'iptv', 'fifa',
+                        'pay per view', 'активация', 'iptv', 'fifa', 'wink',
                         'world cup', 'чемпионат мира', 'плей-офф', 'тариф',
                         'абонент'])
 BLACKLIST_WORDS = _clean(['fifa', 'world cup', 'чемпионат мира', 'плей-офф'])
@@ -504,6 +509,9 @@ LATIN_RU_WORDS = _clean([
     'tv center', 'telekanal', '360', '8 kanal', 'shanson tv', 'retro tv',
     'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
     'kinopoisk', 'illuzion'])
+# Гео/платные заглушки по URL (Wink и подобные OTT)
+BAD_URL_WORDS = _clean(['wink.ru', 'wink.', 'okko.tv', 'ivi.ru', 'more.tv',
+                        'kion.ru', 'start.ru', 'premier.one', 'geoblock', 'geo-block'])
 
 def _read_capped(resp, cap):
     chunks = []
@@ -777,7 +785,10 @@ def is_russian_like(name):
         return True
     n = name.lower()
     return any(w in n for w in LATIN_RU_WORDS)
-def reject_reason(name):
+def is_bad_url(url):
+    u = url.lower()
+    return any(w in u for w in BAD_URL_WORDS)
+def reject_reason(name, url=''):
     if not is_russian_like(name):
         return 'not_ru'
     if is_adult(name):
@@ -788,6 +799,8 @@ def reject_reason(name):
         return 'paywall'
     if is_radio(name):
         return 'radio'
+    if url and is_bad_url(url):
+        return 'geo'
     return None
 def norm_name(name):
     n = name.lower().strip()
@@ -867,7 +880,7 @@ def parse_m3u(text, entries, seen_urls, reasons):
             current_name = m.group(1).strip() if m else ''
         elif line.startswith('http'):
             if current_name:
-                reason = reject_reason(current_name)
+                reason = reject_reason(current_name, line)
                 if reason:
                     reasons[reason] += 1
                 elif line not in seen_urls:
@@ -890,6 +903,16 @@ def parse_m3u(text, entries, seen_urls, reasons):
 
 def flush_playlist(alive, elapsed=None):
     global playlist_cache, alive_list
+    with cache_lock:
+        current = list(alive_list)
+    if elapsed is None and current:
+        have = set(c['url'] for c in current)
+        merged = current
+        for ch in alive:
+            if ch['url'] not in have:
+                have.add(ch['url'])
+                merged.append(ch)
+        alive = merged
     def sort_key(ch):
         try:
             i = CAT_ORDER.index(ch['cat'])
@@ -903,7 +926,7 @@ def flush_playlist(alive, elapsed=None):
     lines = [
         '#EXTM3U',
         '# IPTV Russia Pro MAX + ML | ' + time.strftime('%Y-%m-%d %H:%M'),
-        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без радио | без подписок',
+        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без радио | без подписок | без гео-заглушек',
     ]
     for ch in alive_sorted:
         lines.append(ch['inf'])
@@ -990,7 +1013,7 @@ def update_cache():
             name = ach['name']
             if not name:
                 continue
-            reason = reject_reason(name)
+            reason = reject_reason(name, ach['url'])
             if reason:
                 reasons[reason] += 1
                 continue
@@ -1153,7 +1176,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">⚡ Быстрый старт • Нейронка • Ирочка-категоризатор • new.m3u.su</div>
+<div class="sub">⚡ Быстрый старт • Нейронка • Ирочка • без Wink/гео-заглушек</div>
 <a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
