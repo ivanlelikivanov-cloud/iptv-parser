@@ -8,11 +8,11 @@ import sqlite3
 import pickle
 import requests
 import urllib3
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 from collections import Counter
 from requests.adapters import HTTPAdapter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -186,6 +186,28 @@ CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
              'Музыка', 'Познавательные', 'Развлекательные', 'Региональные', 'Общие']
 
+# 🧠 ТОЧНЫЙ УЧЕБНИК: категории iptv-org -> наши папки
+API_CAT_MAP = [
+    (['kids', 'animation'], 'Детские'),
+    (['news', 'business'], 'Новости'),
+    (['sports'], 'Спорт'),
+    (['movies', 'series'], 'Кино и сериалы'),
+    (['music'], 'Музыка'),
+    (['documentary', 'science', 'culture', 'education', 'history', 'travel',
+      'food', 'cooking', 'health', 'hobby', 'home', 'auto', 'outdoor',
+      'weather', 'religious', 'lifestyle'], 'Познавательные'),
+    (['comedy', 'entertainment', 'family', 'relax', 'general'], 'Развлекательные'),
+]
+
+def api_category(cats):
+    if not cats:
+        return None
+    low = [str(c).lower() for c in cats]
+    for keys, cat in API_CAT_MAP:
+        if any(k in low for k in keys):
+            return cat
+    return None
+
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro — идёт первая проверка каналов...\n"
 alive_list = []
 DEAD_ONCE = set()
@@ -217,6 +239,8 @@ CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
 DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
 MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
 CAT_MODEL_FILE = os.path.join(BASE_DIR, 'cat_model.pkl')
+
+SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
 
 def _sig(z):
     if z >= 0:
@@ -456,8 +480,6 @@ def save_disk_cache(data):
     except Exception:
         pass
 
-SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
-
 def keepalive_worker():
     n = 0
     while True:
@@ -518,6 +540,9 @@ LATIN_RU_WORDS = _clean([
     'kinopoisk', 'illuzion'])
 BAD_URL_WORDS = _clean(['wink.ru', 'wink.', 'okko.tv', 'ivi.ru', 'more.tv',
                         'kion.ru', 'start.ru', 'premier.one', 'geoblock', 'geo-block'])
+JUNK_NAMES = {'index', 'index.m3u8', 'playlist', 'playlist.m3u8', 'live', 'test',
+              'stream', 'video', 'm3u', 'channel', 'tv', '1', 'hd', 'fhd', '4k',
+              'main', 'default', 'unknown', 'без названия', 'безымянный'}
 
 def _read_capped(resp, cap):
     chunks = []
@@ -717,6 +742,7 @@ def fetch_iptv_org_api():
         if ch_r.status_code != 200 or st_r.status_code != 200:
             return []
         names = {}
+        cats_of = {}
         for ch in ch_r.json():
             if ch.get('is_nsfw'):
                 continue
@@ -729,13 +755,14 @@ def fetch_iptv_org_api():
                 langs.append(lng.get('code') if isinstance(lng, dict) else lng)
             if ch.get('country') in CIS_COUNTRIES or 'rus' in langs:
                 names[ch.get('id')] = ch.get('name', '')
+                cats_of[ch.get('id')] = ch.get('categories') or []
         result = []
         for s in st_r.json():
             cid = s.get('channel')
             url = s.get('url')
             if cid in names and url and url.startswith('http'):
                 result.append({
-                    'url': url, 'name': names[cid],
+                    'url': url, 'name': names[cid], 'cats': cats_of.get(cid, []),
                     'ua': s.get('user_agent') or '', 'ref': s.get('http_referrer') or '',
                 })
         return result
@@ -794,7 +821,20 @@ def is_russian_like(name):
 def is_bad_url(url):
     u = url.lower()
     return any(w in u for w in BAD_URL_WORDS)
+def norm_name(name):
+    n = name.lower().strip()
+    n = re.sub(r'[\(\[].*?[\)\]]', '', n)
+    n = re.sub(r'\b(hd|fhd|uhd|4k|sd|hevc|h265|h264)\b', '', n)
+    return re.sub(r'\s+', ' ', n).strip(' -_|')
+def is_junk(name):
+    n = norm_name(name)
+    return n in JUNK_NAMES or len(n) < 3
+def is_hd(name):
+    n = name.lower()
+    return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 def reject_reason(name, url=''):
+    if is_junk(name):
+        return 'junk'
     if not is_russian_like(name):
         return 'not_ru'
     if is_adult(name):
@@ -808,14 +848,6 @@ def reject_reason(name, url=''):
     if url and is_bad_url(url):
         return 'geo'
     return None
-def norm_name(name):
-    n = name.lower().strip()
-    n = re.sub(r'[\(\[].*?[\)\]]', '', n)
-    n = re.sub(r'\b(hd|fhd|uhd|4k|sd|hevc|h265|h264)\b', '', n)
-    return re.sub(r'\s+', ' ', n).strip(' -_|')
-def is_hd(name):
-    n = name.lower()
-    return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
 
 def check_one(ch, limit=None):
     lim = limit or CHECK_TIMEOUT
@@ -955,6 +987,78 @@ def flush_playlist(alive, elapsed=None, replace=False):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
+# ==================== 📡 PROXY: сервер качает поток за тебя ====================
+def proxy_url(u, ua=None, ref=None):
+    q = SELF_URL + '/proxy?url=' + quote(u, safe='')
+    if ua:
+        q += '&ua=' + quote(ua, safe='')
+    if ref:
+        q += '&ref=' + quote(ref, safe='')
+    return q
+
+def make_proxy_playlist():
+    with cache_lock:
+        chans = list(alive_list)
+    lines = ['#EXTM3U', '# IPTV Russia Pro MAX (PROXY) | ' + time.strftime('%Y-%m-%d %H:%M')]
+    for ch in chans:
+        lines.append(ch['inf'])
+        ua = ch.get('ua') or 'VLC/3.0.20 LibVLC/3.0.20'
+        lines.append(proxy_url(ch['url'], ua, ch.get('ref')))
+    return '\n'.join(lines)
+
+@app.route('/proxy')
+def proxy():
+    url = request.args.get('url')
+    if not url:
+        return ('', 400)
+    ua = request.args.get('ua') or HEADERS_PLAYER['User-Agent']
+    ref = request.args.get('ref')
+    hdr = {'User-Agent': ua}
+    if ref:
+        hdr['Referer'] = ref
+    try:
+        r = requests.get(url, headers=hdr, stream=True, timeout=(10, 30),
+                         verify=False, allow_redirects=True)
+    except Exception:
+        return ('', 502)
+    if r.status_code >= 400:
+        r.close()
+        return ('', 502)
+    ct = (r.headers.get('Content-Type') or 'application/octet-stream').lower()
+    if 'mpegurl' in ct or url.lower().endswith(('.m3u8', '.m3u')):
+        text = r.text
+        r.close()
+        base = url.rsplit('/', 1)[0] + '/'
+        out = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith('#'):
+                if 'URI="' in s:
+                    m = re.search(r'URI="([^"]+)"', s)
+                    if m:
+                        u2 = m.group(1)
+                        abs_u = u2 if u2.startswith('http') else base + u2
+                        s = s.replace(m.group(0), 'URI="' + proxy_url(abs_u, ua, ref) + '"')
+                out.append(s)
+            else:
+                abs_u = s if s.startswith('http') else base + s
+                out.append(proxy_url(abs_u, ua, ref))
+        resp = Response('\n'.join(out), mimetype='application/vnd.apple.mpegurl')
+        resp.headers['Cache-Control'] = 'no-store'
+        return resp
+    def gen():
+        try:
+            for chunk in r.iter_content(65536):
+                yield chunk
+        finally:
+            r.close()
+    resp = Response(gen(), mimetype=ct.split(';')[0])
+    resp.headers['Cache-Control'] = 'no-store'
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
 def quick_seed():
     logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
     seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
@@ -1058,7 +1162,6 @@ def update_cache():
     start = time.time()
     logger.info("🔄 Старт: разведка + накопление (мастер-список не сбрасывается)...")
     try:
-        # 📈 МАСТЕР-СПИСОК: стартуем от текущего плейлиста, а не с нуля
         with cache_lock:
             alive = list(alive_list)
         alive_urls = set(ch['url'] for ch in alive)
@@ -1078,6 +1181,7 @@ def update_cache():
         entries = {}
         seen = set()
         reasons = Counter()
+        strong_pairs = []
         api_channels = fetch_iptv_org_api()
         logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/радио): {len(api_channels)}")
         for ach in api_channels:
@@ -1092,7 +1196,10 @@ def update_cache():
             if url in seen:
                 continue
             seen.add(url)
-            cat = get_category(name)
+            # 🧠 Точная категория из метаданных iptv-org, иначе слова
+            cat = api_category(ach.get('cats')) or get_category(name)
+            if api_category(ach.get('cats')):
+                strong_pairs.append((name, cat))
             inf = '#EXTINF:-1 group-title="' + cat + '",' + name
             key = norm_name(name)
             new_ch = {'inf': inf, 'url': url, 'cat': cat, 'name': name, 'ua': ach['ua'], 'ref': ach['ref']}
@@ -1135,7 +1242,9 @@ def update_cache():
         logger.info(f"Фильтры вырезали: {dict(reasons)}")
         with cache_lock:
             stats['filtered'] = dict(reasons)
-        pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Общие']
+        # 🧠 Учим Ирочку на ТОЧНЫХ метках iptv-org + уверенных словах
+        pairs = strong_pairs + [(ch['name'], ch['cat']) for ch in entries.values()
+                                if ch['cat'] != 'Общие' and (ch['name'], ch['cat']) not in strong_pairs]
         cat_nb.fit(pairs)
         cat_nb.save()
         moved = apply_nb(list(entries.values()))
@@ -1227,8 +1336,11 @@ def background_worker():
         time.sleep(wait)
 
 def make_playlist_response():
-    with cache_lock:
-        data = playlist_cache
+    if request.args.get('proxy') == '1':
+        data = make_proxy_playlist()
+    else:
+        with cache_lock:
+            data = playlist_cache
     resp = Response(data, mimetype='application/vnd.apple.mpegurl')
     resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
     resp.headers['Cache-Control'] = 'no-store'
@@ -1244,7 +1356,7 @@ body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg
 h1{margin:0 0 8px;font-size:32px}
 .sub{opacity:.7;margin-bottom:24px}
 .btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
-.btn.blue{background:#2196f3}.btn.gray{background:#607d8b}
+.btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
 .stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
 .stat b{display:block;font-size:24px}
@@ -1252,11 +1364,11 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">📈 Накопительный плейлист • 🩺 ежечасная чистка • Ирочка с мозгами</div>
-<a class="btn" href="/playlist.m3u">📥 Скачать плейлист</a>
+<div class="sub">📈 Накопительный • 📡 PROXY-режим • 🧠 Ирочка с точными метками</div>
+<a class="btn" href="/playlist.m3u">📥 Плейлист (прямой)</a>
+<a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
-<a class="btn gray" href="/memory">💾 RAM</a>
 <div class="stats">
 <div class="stat"><b>__ALIVE__</b><span>живых каналов</span></div>
 <div class="stat"><b>__PARSED__</b><span>проверено</span></div>
