@@ -767,3 +767,485 @@ def fetch_iptv_org_api():
             if ch.get('is_nsfw'):
                 continue
             if ch.get('country') == 'UA':
+continue
+            langs = []
+            for lng in (ch.get('languages') or []):
+                langs.append(lng.get('code') if isinstance(lng, dict) else lng)
+            if ch.get('country') in CIS_COUNTRIES or 'rus' in langs:
+                names[ch.get('id')] = ch.get('name', '')
+        result = []
+        for s in st_r.json():
+            cid = s.get('channel')
+            url = s.get('url')
+            if cid in names and url and url.startswith('http'):
+                result.append({
+                    'url': url,
+                    'name': names[cid],
+                    'ua': s.get('user_agent') or '',
+                    'ref': s.get('http_referrer') or '',
+                })
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка API iptv-org: {e}")
+        return []
+
+def fetch_source_text(url):
+    try:
+        r = get_session().get(url, timeout=(5, 10), headers=HEADERS_WEB,
+                              verify=False, stream=True)
+        if r.status_code != 200:
+            r.close()
+            return None
+        text = _read_capped(r, MAX_PLAYLIST_BYTES)
+        return text if text else None
+    except Exception:
+        return None
+
+# ==================== КАТЕГОРИИ И ФИЛЬТРЫ ====================
+def get_category(name):
+    n = name.lower()
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby']):
+        return 'Детские'
+    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
+        return 'Новости'
+    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
+        return 'Спорт'
+    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
+        return 'Кино и сериалы'
+    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз', 'клип']):
+        return 'Музыка'
+    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health', 'медицин']):
+        return 'Познавательные'
+    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот']):
+        return 'Развлекательные'
+    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'городской']):
+        return 'Региональные'
+    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
+        return 'Федеральные'
+    return 'Общие'
+
+def is_adult(name):
+    n = name.lower()
+    return any(w in n for w in ADULT_WORDS)
+
+def is_ukrainian(name):
+    n = name.lower()
+    return any(w in n for w in UA_WORDS)
+
+def is_paywall(name):
+    n = name.lower()
+    if any(w in n for w in PAYWALL_WORDS):
+        return True
+    if any(w.lower() in n for w in BLACKLIST_WORDS):
+        return True
+    return False
+
+def is_radio(name):
+    n = name.lower()
+    if any(w in n for w in RADIO_WORDS):
+        return True
+    if re.search(r'\bfm\b', n) or 'радиостанция' in n:
+        return True
+    return False
+
+def is_russian_like(name):
+    if re.search(r'[\u0400-\u04FF]', name):
+        return True
+    n = name.lower()
+    return any(w in n for w in LATIN_RU_WORDS)
+
+def reject_reason(name):
+    if not is_russian_like(name):
+        return 'not_ru'
+    if is_adult(name):
+        return 'adult'
+    if is_ukrainian(name):
+        return 'ua'
+    if is_paywall(name):
+        return 'paywall'
+    if is_radio(name):
+        return 'radio'
+    return None
+
+def norm_name(name):
+    n = name.lower().strip()
+    n = re.sub(r'[\(\[].*?[\)\]]', '', n)
+    n = re.sub(r'\b(hd|fhd|uhd|4k|sd|hevc|h265|h264)\b', '', n)
+    return re.sub(r'\s+', ' ', n).strip(' -_|')
+
+def is_hd(name):
+    n = name.lower()
+    return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
+
+# ==================== ПРОВЕРКА ====================
+def check_one(ch, limit=None):
+    lim = limit or CHECK_TIMEOUT
+    url = ch['url']
+    headers = dict(HEADERS_PLAYER)
+    if ch.get('ua'):
+        headers['User-Agent'] = ch['ua']
+    if ch.get('ref'):
+        headers['Referer'] = ch['ref']
+
+    session = get_session()
+    start = time.monotonic()
+
+    def remaining():
+        return lim - (time.monotonic() - start)
+
+    try:
+        r = session.head(url, timeout=min(10, lim), headers=headers,
+                         allow_redirects=True, verify=False)
+        if r.status_code < 400:
+            ct = r.headers.get('content-type', '').lower()
+            if any(g in ct for g in GOOD_CT):
+                return True
+    except Exception:
+        pass
+
+    for _ in range(2):
+        if remaining() <= 1:
+            return False
+        try:
+            r = session.get(url, timeout=remaining(), headers=headers,
+                            stream=True, allow_redirects=True, verify=False)
+        except Exception:
+            continue
+
+        if r.status_code >= 400:
+            return False
+
+        ct = r.headers.get('content-type', '').lower()
+        try:
+            chunk = next(r.iter_content(chunk_size=2048), b'')
+        except Exception:
+            continue
+        finally:
+            r.close()
+
+        if not chunk:
+            return False
+        if any(g in ct for g in GOOD_CT):
+            return True
+        if chunk[:1] == b'\x47':
+            return True
+        low = chunk[:300].lower()
+        if b'#extm3u' in low or b'#extinf' in low:
+            return True
+        if b'<html' in low or b'<!doctype' in low or b'<script' in low:
+            return False
+        try:
+            txt_low = low.decode('utf-8', errors='ignore')
+        except Exception:
+            txt_low = ''
+        if any(m in txt_low for m in BLOCK_MARKERS):
+            return False
+        return True
+
+    return False
+
+# ==================== ПАРСЕР ====================
+def parse_m3u(text, entries, seen_urls, reasons):
+    current_inf = ''
+    current_name = ''
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('#EXTINF:'):
+            current_inf = line
+            m = re.search(r',\s*(.+)$', line)
+            current_name = m.group(1).strip() if m else ''
+        elif line.startswith('http'):
+            if current_name:
+                reason = reject_reason(current_name)
+                if reason:
+                    reasons[reason] += 1
+                elif line not in seen_urls:
+                    seen_urls.add(line)
+                    cat = get_category(current_name)
+                    inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
+                    inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
+                    ch = {'inf': inf, 'url': line, 'cat': cat,
+                          'name': current_name, 'ua': '', 'ref': ''}
+                    key = norm_name(current_name)
+                    if key in entries:
+                        if is_hd(current_name) and not is_hd(entries[key]['name']):
+                            entries[key] = ch
+                    else:
+                        entries[key] = ch
+                        if len(entries) >= MAX_CHANNELS:
+                            return True
+            current_inf = ''
+            current_name = ''
+    return False
+
+# ==================== СБОРКА (НЕ ПИШЕТ ПУСТОТУ + EXTVLCOPT) ====================
+def flush_playlist(alive, elapsed=None):
+    global playlist_cache, alive_list
+
+    def sort_key(ch):
+        try:
+            i = CAT_ORDER.index(ch['cat'])
+        except ValueError:
+            i = len(CAT_ORDER)
+        return (i, ch['name'].lower())
+
+    alive_sorted = sorted(alive, key=sort_key)
+    if not alive_sorted:
+        return
+    cat_counts = Counter(ch['cat'] for ch in alive_sorted)
+    lines = [
+        '#EXTM3U',
+        '# IPTV Russia Pro MAX + ML | ' + time.strftime('%Y-%m-%d %H:%M'),
+        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без радио | без подписок',
+    ]
+    for ch in alive_sorted:
+        lines.append(ch['inf'])
+        ua = ch.get('ua') or 'VLC/3.0.20 LibVLC/3.0.20'
+        lines.append('#EXTVLCOPT:http-user-agent=' + ua)
+        if ch.get('ref'):
+            lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
+        lines.append(ch['url'])
+    data = '\n'.join(lines)
+    with cache_lock:
+        playlist_cache = data
+        alive_list = alive_sorted
+        stats['alive_channels'] = len(alive_sorted)
+        stats['categories'] = dict(cat_counts)
+        if elapsed is not None:
+            stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            stats['duration_sec'] = round(elapsed, 1)
+    save_disk_cache(data)
+
+# ==================== ⚡ БЫСТРЫЙ СТАРТ ====================
+def quick_seed():
+    logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
+    seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
+    entries = {}
+    seen = set()
+    reasons = Counter()
+    ex = ThreadPoolExecutor(max_workers=12)
+    try:
+        for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
+            if txt:
+                parse_m3u(txt, entries, seen, reasons)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+
+    raw = list(entries.values())[:1000]
+    if not raw:
+        logger.warning("⚡ Стартовый набор пуст, ждём большой прогон")
+        return []
+
+    alive = []
+    ex = ThreadPoolExecutor(max_workers=40)
+    futs = {ex.submit(check_one, ch, SEED_TIMEOUT): ch for ch in raw}
+    try:
+        for f in as_completed(futs.keys(), timeout=90):
+            ch = futs[f]
+            try:
+                ok = bool(f.result())
+            except Exception:
+                ok = False
+            if ok:
+                alive.append(ch)
+            brain.record(urlparse(ch['url']).netloc, ok)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+
+    if alive:
+        flush_playlist(alive)
+        logger.info(f"⚡ Стартовый набор: {len(alive)} каналов УЖЕ в плейлисте")
+    return alive
+
+# ==================== ОБНОВЛЕНИЕ ====================
+def update_cache():
+    global playlist_cache, is_updating
+    if is_updating:
+        return
+    is_updating = True
+    start = time.time()
+    logger.info("🔄 Старт: разведка ВСЕХ платформ + форумы + TG + ML + Ирочка...")
+
+    try:
+        seed_alive = quick_seed()
+        alive = list(seed_alive)
+        alive_urls = set(ch['url'] for ch in alive)
+
+        entries = {}
+        seen = set()
+        reasons = Counter()
+
+        api_channels = fetch_iptv_org_api()
+        logger.info(f"API iptv-org: потоков РФ/СНГ (без UA/радио): {len(api_channels)}")
+        for ach in api_channels:
+            name = ach['name']
+            if not name:
+                continue
+            reason = reject_reason(name)
+            if reason:
+                reasons[reason] += 1
+                continue
+            url = ach['url']
+            if url in seen:
+                continue
+            seen.add(url)
+            cat = get_category(name)
+            inf = '#EXTINF:-1 group-title="' + cat + '",' + name
+            key = norm_name(name)
+            new_ch = {'inf': inf, 'url': url, 'cat': cat,
+                      'name': name, 'ua': ach['ua'], 'ref': ach['ref']}
+            if key in entries:
+                if is_hd(name) and not is_hd(entries[key]['name']):
+                    entries[key] = new_ch
+            else:
+                entries[key] = new_ch
+
+        regions = fetch_ru_regions()
+        if not regions:
+            regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u'
+                       for r in FALLBACK_REGIONS]
+
+        base = list(set(STATIC_SOURCES + regions))
+        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab()
+                         + fetch_bitbucket() + fetch_gitea_family()
+                         + fetch_web_search() + fetch_telegram()) - set(base))
+        sources = base + extra[:MAX_EXTRA_SOURCES]
+        logger.info(f"ВСЕГО источников: {len(sources)}")
+
+        loaded = 0
+        ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
+        futs = [ex.submit(fetch_source_text, u) for u in sources]
+        try:
+            for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
+                try:
+                    txt = f.result()
+                except Exception:
+                    txt = None
+                if txt:
+                    loaded += 1
+                    parse_m3u(txt, entries, seen, reasons)
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы источников ({SOURCE_PHASE_MAX}с), успело: {loaded}")
+        except Exception as e:
+            logger.error(f"Ошибка фазы источников: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
+        logger.info(f"Загружено и распарсено плейлистов: {loaded}")
+        logger.info(f"Фильтры вырезали: {dict(reasons)}")
+        with cache_lock:
+            stats['filtered'] = dict(reasons)
+
+        # 🧠 Ирочка учится и раскидывает «Общие» по папкам
+        pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Общие']
+        cat_nb.fit(pairs)
+        cat_nb.save()
+        moved = apply_nb(list(entries.values()))
+        with cache_lock:
+            stats['nb_moved'] = moved
+        logger.info(f"🧠 Ирочка распределила из «Общих»: {moved} каналов")
+
+        raw = list(entries.values())
+        for ch in raw:
+            ch['feats'] = extract_features(ch)
+            ch['host'] = urlparse(ch['url']).netloc
+            ch['ml_score'] = brain.score(ch['feats'], ch['host'])
+        raw.sort(key=lambda c: -c['ml_score'])
+
+        if len(raw) > MAX_CHECK_POOL:
+            logger.info(f"Кандидатов {len(raw)}, ML выбрал топ-{MAX_CHECK_POOL}")
+            raw = raw[:MAX_CHECK_POOL]
+        if not raw:
+            logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
+        with cache_lock:
+            stats['sources_total'] = len(sources)
+            stats['playlists_loaded'] = loaded
+            stats['api_streams'] = len(api_channels)
+            stats['parsed_channels'] = len(raw)
+        logger.info(f"Уникальных каналов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
+
+        samples = []
+        since_flush = 0
+        checked = 0
+        last_beat = time.time()
+        ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
+        futs = {ex.submit(check_one, ch): ch for ch in raw}
+        try:
+            for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
+                checked += 1
+                ch = futs[f]
+                try:
+                    ok = bool(f.result())
+                except Exception:
+                    ok = False
+                if ok and ch['url'] not in alive_urls:
+                    alive_urls.add(ch['url'])
+                    alive.append(ch)
+                    since_flush += 1
+                    if since_flush >= FLUSH_EVERY:
+                        flush_playlist(alive)
+                        since_flush = 0
+                samples.append((ch['feats'], 1 if ok else 0))
+                brain.record(ch['host'], ok)
+                if time.time() - last_beat > HEARTBEAT_SEC:
+                    logger.info(f"Прогресс проверки: {checked}/{len(raw)}, живых: {len(alive)}")
+                    last_beat = time.time()
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы проверки ({CHECK_PHASE_MAX}с), фиксирую: {len(alive)} живых")
+        except Exception as e:
+            logger.error(f"Ошибка фазы проверки: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
+
+        apply_nb(alive)
+        brain.train(samples)
+        with cache_lock:
+            stats['ml_samples'] = brain.trained_samples
+            stats['ml_accuracy'] = round(brain.last_accuracy, 3)
+
+        elapsed = time.time() - start
+        flush_playlist(alive, elapsed=elapsed)
+        logger.info(f"✅ Готово: {len(alive)} живых из {len(raw)} за {elapsed:.0f} сек")
+
+    except Exception as e:
+        logger.exception(f"КРИТИЧЕСКАЯ ошибка обновления: {e}")
+    finally:
+        is_updating = False
+
+def background_worker():
+    global is_updating
+    while True:
+        try:
+            update_cache()
+        except Exception as e:
+            logger.exception(f"Фоновая ошибка: {e}")
+            is_updating = False
+        with cache_lock:
+            alive_n = stats['alive_channels']
+        wait = UPDATE_EVERY if alive_n > 0 else RETRY_IF_EMPTY
+        logger.info(f"Следующая попытка через {wait // 60} мин")
+        time.sleep(wait)
+
+load_disk_cache()
+threading.Thread(target=background_worker, daemon=True).start()
+threading.Thread(target=keepalive_worker, daemon=True).start()
+
+# ==================== ВЕБ ====================
+def make_playlist_response
