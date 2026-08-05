@@ -101,46 +101,28 @@ STATIC_SOURCES = [
 ]
 
 HTML_SOURCES = [
-    "https://m3u.su/",
-    "https://m3u.su/m3u/",
+    "https://m3u.su/", "https://m3u.su/m3u/",
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
-    "https://sat-portal.com/plejlisty/",
-    "https://6x6.msk.ru/",
-    "https://homtv.ru/",
-    "https://iptv-rus.com/",
-    "https://iptv-rus.com/playlists/",
-    "https://pikniktv.info/viewtopic.php?t=6737",
-    "https://pikniktv.info/viewforum.php?f=328",
-    "https://webarmen.com/my/iptv/",
-    "https://go2tv.top/",
-    "https://iptv.one/",
-    "https://iptv.best/",
-    "https://iptv-channels.net/",
-    "https://iptv-live.ru/",
-    "https://iptv-tv.ru/",
-    "https://iptv-russia.online/",
-    "https://vse-tv.net/",
-    "https://vse-tv.net/playlists.html",
-    "https://forumtv.org/",
+    "https://sat-portal.com/plejlisty/", "https://6x6.msk.ru/", "https://homtv.ru/",
+    "https://iptv-rus.com/", "https://iptv-rus.com/playlists/",
+    "https://pikniktv.info/viewtopic.php?t=6737", "https://pikniktv.info/viewforum.php?f=328",
+    "https://webarmen.com/my/iptv/", "https://go2tv.top/", "https://iptv.one/",
+    "https://iptv.best/", "https://iptv-channels.net/", "https://iptv-live.ru/",
+    "https://iptv-tv.ru/", "https://iptv-russia.online/", "https://vse-tv.net/",
+    "https://vse-tv.net/playlists.html", "https://forumtv.org/",
     "https://webos-forums.ru/post167674.html",
     "https://www.free-codecs.com/guides/free-popular-iptv-playlist.htm",
-    "https://github.com/iptv-org/iptv",
-    "https://github.com/Free-iptv/iptv",
-    "https://github.com/4mirror/iptv",
-    "https://github.com/hmlendea/iptv-playlist-aggregator",
-    "https://pskovline.tv/tvm3u.php",
-    "https://onlinetv.ru/",
-    "https://smotret-tv.online/",
+    "https://github.com/iptv-org/iptv", "https://github.com/Free-iptv/iptv",
+    "https://github.com/4mirror/iptv", "https://github.com/hmlendea/iptv-playlist-aggregator",
+    "https://pskovline.tv/tvm3u.php", "https://onlinetv.ru/", "https://smotret-tv.online/",
 ]
 
 FALLBACK_REGIONS = [
-    "ru-kgd", "ru-mow", "ru-mos", "ru-spe", "ru-len",
-    "ru-kda", "ru-ros", "ru-vgg", "ru-sta", "ru-da",
-    "ru-sam", "ru-ud", "ru-ta", "ru-ba", "ru-udm",
-    "ru-per", "ru-sve", "ru-che", "ru-tyu",
-    "ru-oms", "ru-nvs", "ru-tom", "ru-kem", "ru-alt",
-    "ru-kya", "ru-irk", "ru-bu", "ru-sa", "ru-zab",
-    "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam", "ru-chu",
+    "ru-kgd", "ru-mow", "ru-mos", "ru-spe", "ru-len", "ru-kda", "ru-ros", "ru-vgg",
+    "ru-sta", "ru-da", "ru-sam", "ru-ud", "ru-ta", "ru-ba", "ru-udm", "ru-per",
+    "ru-sve", "ru-che", "ru-tyu", "ru-oms", "ru-nvs", "ru-tom", "ru-kem", "ru-alt",
+    "ru-kya", "ru-irk", "ru-bu", "ru-sa", "ru-zab", "ru-pri", "ru-kha", "ru-amu",
+    "ru-sak", "ru-mag", "ru-kam", "ru-chu",
 ]
 
 GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv', 'iptv m3u8 ru']
@@ -186,7 +168,6 @@ CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
              'Музыка', 'Познавательные', 'Развлекательные', 'Региональные', 'Общие']
 
-# 🧠 ТОЧНЫЙ УЧЕБНИК: категории iptv-org -> наши папки
 API_CAT_MAP = [
     (['kids', 'animation'], 'Детские'),
     (['news', 'business'], 'Новости'),
@@ -226,7 +207,7 @@ logger = logging.getLogger(__name__)
 
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
-GOOD_CT = ('video/', 'audio/', 'mpegurl', 'octet-stream', 'mp2t')
+GOOD_CT = ('video/', 'audio/', 'octet-stream', 'mp2t')
 
 BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'forbidden', 'captcha', 'cloudflare', 'access denied',
@@ -241,6 +222,14 @@ MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
 CAT_MODEL_FILE = os.path.join(BASE_DIR, 'cat_model.pkl')
 
 SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
+
+def proxy_url(u, ua=None, ref=None):
+    q = SELF_URL + '/proxy?url=' + quote(u, safe='')
+    if ua:
+        q += '&ua=' + quote(ua, safe='')
+    if ref:
+        q += '&ref=' + quote(ref, safe='')
+    return q
 
 def _sig(z):
     if z >= 0:
@@ -849,6 +838,14 @@ def reject_reason(name, url=''):
         return 'geo'
     return None
 
+def _first_media_uri(text, base):
+    for l in text.splitlines():
+        s = l.strip()
+        if not s or s.startswith('#'):
+            continue
+        return s if s.startswith('http') else base + s
+    return None
+
 def check_one(ch, limit=None):
     lim = limit or CHECK_TIMEOUT
     url = ch['url']
@@ -865,7 +862,7 @@ def check_one(ch, limit=None):
         r = session.head(url, timeout=min(10, lim), headers=headers, allow_redirects=True, verify=False)
         if r.status_code < 400:
             ct = r.headers.get('content-type', '').lower()
-            if any(g in ct for g in GOOD_CT):
+            if any(g in ct for g in GOOD_CT) and 'mpegurl' not in ct:
                 return True
     except Exception:
         pass
@@ -887,20 +884,56 @@ def check_one(ch, limit=None):
             r.close()
         if not chunk:
             return False
-        if any(g in ct for g in GOOD_CT):
+        is_hls = ('mpegurl' in ct) or ('.m3u8' in url.lower()) or (chunk[:7] == b'#EXTM3U')
+        if not is_hls:
+            if any(g in ct for g in GOOD_CT):
+                return True
+            if chunk[:1] == b'\x47':
+                return True
+            low = chunk[:300].lower()
+            if b'<html' in low or b'<!doctype' in low or b'<script' in low:
+                return False
+            try:
+                txt_low = low.decode('utf-8', errors='ignore')
+            except Exception:
+                txt_low = ''
+            if any(m in txt_low for m in BLOCK_MARKERS):
+                return False
             return True
-        if chunk[:1] == b'\x47':
-            return True
-        low = chunk[:300].lower()
-        if b'#extm3u' in low or b'#extinf' in low:
-            return True
-        if b'<html' in low or b'<!doctype' in low or b'<script' in low:
+        # 🔬 ГЛУБОКАЯ ПРОВЕРКА HLS: читаем плейлист, щупаем первый сегмент
+        try:
+            r2 = session.get(url, timeout=min(remaining(), 10), headers=headers,
+                             verify=False, allow_redirects=True)
+            text = r2.text[:200000]
+        except Exception:
+            return False
+        if '#EXTM3U' not in text:
+            return False
+        base = url.rsplit('/', 1)[0] + '/'
+        seg = _first_media_uri(text, base)
+        if not seg:
+            return False
+        if remaining() <= 1:
             return False
         try:
-            txt_low = low.decode('utf-8', errors='ignore')
+            rs = session.get(seg, timeout=min(remaining(), 10), headers=headers,
+                             stream=True, verify=False, allow_redirects=True)
+            if rs.status_code >= 400:
+                return False
+            head = next(rs.iter_content(chunk_size=4096), b'')
+            rs.close()
         except Exception:
-            txt_low = ''
-        if any(m in txt_low for m in BLOCK_MARKERS):
+            return False
+        if not head:
+            return False
+        if head[:1] == b'\x47':
+            return True
+        if b'ftyp' in head[:16] or b'moov' in head[:32] or b'styp' in head[:16]:
+            return True
+        if head[:7] == b'#EXTM3U':
+            return True
+        low = head[:200].lower()
+        if b'<html' in low or b'<!doctype' in low:
             return False
         return True
     return False
@@ -971,11 +1004,12 @@ def flush_playlist(alive, elapsed=None, replace=False):
     ]
     for ch in alive_sorted:
         lines.append(ch['inf'])
-        ua = ch.get('ua') or 'VLC/3.0.20 LibVLC/3.0.20'
-        lines.append('#EXTVLCOPT:http-user-agent=' + ua)
-        if ch.get('ref'):
-            lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
-        lines.append(ch['url'])
+        if ch.get('ua') or ch.get('ref'):
+            # 📡 капризные (нужны заголовки) — автоматически через PROXY
+            lines.append(proxy_url(ch['url'], ch.get('ua'), ch.get('ref')))
+        else:
+            lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
+            lines.append(ch['url'])
     data = '\n'.join(lines)
     with cache_lock:
         playlist_cache = data
@@ -986,15 +1020,6 @@ def flush_playlist(alive, elapsed=None, replace=False):
             stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
-
-# ==================== 📡 PROXY: сервер качает поток за тебя ====================
-def proxy_url(u, ua=None, ref=None):
-    q = SELF_URL + '/proxy?url=' + quote(u, safe='')
-    if ua:
-        q += '&ua=' + quote(ua, safe='')
-    if ref:
-        q += '&ref=' + quote(ref, safe='')
-    return q
 
 def make_proxy_playlist():
     with cache_lock:
@@ -1166,7 +1191,6 @@ def update_cache():
             alive = list(alive_list)
         alive_urls = set(ch['url'] for ch in alive)
         alive_names = set(norm_name(ch['name']) for ch in alive)
-
         for ch in quick_seed():
             if ch['url'] not in alive_urls:
                 nk = norm_name(ch['name'])
@@ -1177,7 +1201,6 @@ def update_cache():
                 alive.append(ch)
         if alive:
             flush_playlist(alive)
-
         entries = {}
         seen = set()
         reasons = Counter()
@@ -1196,7 +1219,6 @@ def update_cache():
             if url in seen:
                 continue
             seen.add(url)
-            # 🧠 Точная категория из метаданных iptv-org, иначе слова
             cat = api_category(ach.get('cats')) or get_category(name)
             if api_category(ach.get('cats')):
                 strong_pairs.append((name, cat))
@@ -1242,9 +1264,8 @@ def update_cache():
         logger.info(f"Фильтры вырезали: {dict(reasons)}")
         with cache_lock:
             stats['filtered'] = dict(reasons)
-        # 🧠 Учим Ирочку на ТОЧНЫХ метках iptv-org + уверенных словах
         pairs = strong_pairs + [(ch['name'], ch['cat']) for ch in entries.values()
-                                if ch['cat'] != 'Общие' and (ch['name'], ch['cat']) not in strong_pairs]
+                                if ch['cat'] != 'Общие']
         cat_nb.fit(pairs)
         cat_nb.save()
         moved = apply_nb(list(entries.values()))
@@ -1364,7 +1385,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">📈 Накопительный • 📡 PROXY-режим • 🧠 Ирочка с точными метками</div>
+<div class="sub">🔬 Глубокая проверка HLS • 📡 авто-PROXY капризных • 🧠 Ирочка</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист (прямой)</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
