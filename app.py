@@ -1116,10 +1116,11 @@ def proxy():
     return resp
 
 def make_playlist_response():
-    direct = request.args.get('direct') == '1'
+    # По умолчанию — ПРЯМЫЕ ссылки (рабочие); прокси только по ?proxy=1
+    proxy_mode = request.args.get('proxy') == '1'
     with cache_lock:
         chans = list(alive_list)
-    data = build_playlist(chans, not direct) if chans else playlist_cache
+    data = build_playlist(chans, proxy_mode) if chans else playlist_cache
     resp = Response(data, mimetype='application/vnd.apple.mpegurl')
     resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
     resp.headers['Cache-Control'] = 'no-store'
@@ -1415,9 +1416,9 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">📡 PROXY по умолчанию • 🔬 мягкая проверка • 🧠 Ирочка • ?direct=1 — прямые</div>
-<a class="btn" href="/playlist.m3u">📥 Плейлист (PROXY)</a>
-<a class="btn orange" href="/playlist.m3u?direct=1">📥 Плейлист (DIRECT)</a>
+<div class="sub">📥 Прямой плейлист (рабочий) • 📡 PROXY по ?proxy=1 • 🧠 Ирочка</div>
+<a class="btn" href="/playlist.m3u">📥 Плейлист (основной)</a>
+<a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
 <a class="btn gray" href="/status">📊 JSON</a>
 <div class="stats">
