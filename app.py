@@ -874,6 +874,10 @@ def _first_media_uri(text, base):
         return s if s.startswith('http') else base + s
     return None
 
+# ==================== ПРОВЕРКА: alive / blocked / dead ====================
+# alive   — играет даже с сервера
+# blocked — 403/451/заглушка/таймаут (гео-блок для Европы): НЕ удаляем, добавляем (в РФ играет)
+# dead    — 404/пусто/HTML-мусор: только это удаляется
 def check_one(ch, limit=None):
     lim = limit or CHECK_TIMEOUT
     url = ch['url']
@@ -891,18 +895,22 @@ def check_one(ch, limit=None):
         if r.status_code < 400:
             ct = r.headers.get('content-type', '').lower()
             if any(g in ct for g in GOOD_CT) and 'mpegurl' not in ct:
-                return True
+                return 'alive'
     except Exception:
         pass
     for _ in range(2):
         if remaining() <= 1:
-            return False
+            return 'blocked'
         try:
             r = session.get(url, timeout=remaining(), headers=headers, stream=True, allow_redirects=True, verify=False)
         except Exception:
             continue
+        if r.status_code in (401, 403, 451):
+            return 'blocked'
+        if r.status_code in (404, 410):
+            return 'dead'
         if r.status_code >= 400:
-            return False
+            return 'dead'
         ct = r.headers.get('content-type', '').lower()
         try:
             chunk = next(r.iter_content(chunk_size=2048), b'')
@@ -911,57 +919,65 @@ def check_one(ch, limit=None):
         finally:
             r.close()
         if not chunk:
-            return False
+            return 'dead'
         is_hls = ('mpegurl' in ct) or ('.m3u8' in url.lower()) or (chunk[:7] == b'#EXTM3U')
         if not is_hls:
             if any(g in ct for g in GOOD_CT):
-                return True
+                return 'alive'
             if chunk[:1] == b'\x47':
-                return True
+                return 'alive'
             low = chunk[:300].lower()
             if b'<html' in low or b'<!doctype' in low or b'<script' in low:
-                return False
+                if any(m in low for m in BLOCK_MARKERS):
+                    return 'blocked'
+                return 'dead'
             try:
                 txt_low = low.decode('utf-8', errors='ignore')
             except Exception:
                 txt_low = ''
             if any(m in txt_low for m in BLOCK_MARKERS):
-                return False
-            return True
-        # 🔬 ГЛУБОКАЯ ПРОВЕРКА HLS (МЯГКАЯ): убивает только явные ошибки
+                return 'blocked'
+            return 'alive'
         try:
             r2 = session.get(url, timeout=min(remaining(), 10), headers=headers,
                              verify=False, allow_redirects=True)
             text = r2.text[:200000]
         except Exception:
-            return True
+            return 'blocked'
         if '#EXTM3U' not in text:
-            return False
+            return 'dead'
         base = url.rsplit('/', 1)[0] + '/'
         seg = _first_media_uri(text, base)
         if not seg:
-            return False
+            return 'dead'
         if remaining() <= 1:
-            return True
+            return 'blocked'
         try:
             rs = session.get(seg, timeout=min(remaining(), 10), headers=headers,
                              stream=True, verify=False, allow_redirects=True)
+            if rs.status_code in (401, 403, 451):
+                return 'blocked'
             if rs.status_code >= 400:
-                return False
+                return 'dead'
             head = next(rs.iter_content(chunk_size=4096), b'')
             rs.close()
         except Exception:
-            return True
+            return 'blocked'
         if not head:
-            return True
+            return 'blocked'
         if head[:1] == b'\x47' or b'ftyp' in head[:16] or b'moov' in head[:32] \
                 or b'styp' in head[:16] or head[:7] == b'#EXTM3U':
-            return True
+            return 'alive'
         low = head[:200].lower()
-        if b'<html' in low or b'<!doctype' in low or any(m in low for m in BLOCK_MARKERS):
-            return False
-        return True
-    return False
+        if b'<html' in low or b'<!doctype' in low:
+            if any(m in low for m in BLOCK_MARKERS):
+                return 'blocked'
+            return 'dead'
+        return 'alive'
+    return 'blocked'
+
+def is_ok(res):
+    return res in ('alive', 'blocked')
 
 def parse_m3u(text, entries, seen_urls, reasons):
     current_inf = ''
@@ -1116,7 +1132,6 @@ def proxy():
     return resp
 
 def make_playlist_response():
-    # По умолчанию — ПРЯМЫЕ ссылки (рабочие); прокси только по ?proxy=1
     proxy_mode = request.args.get('proxy') == '1'
     with cache_lock:
         chans = list(alive_list)
@@ -1155,12 +1170,12 @@ def quick_seed():
         for f in as_completed(futs.keys(), timeout=90):
             ch = futs[f]
             try:
-                ok = bool(f.result())
+                res = f.result()
             except Exception:
-                ok = False
-            if ok:
+                res = 'dead'
+            if is_ok(res):
                 alive.append(ch)
-            brain.record(urlparse(ch['url']).netloc, ok)
+            brain.record(urlparse(ch['url']).netloc, is_ok(res))
     except Exception:
         pass
     finally:
@@ -1184,10 +1199,10 @@ def health_sweep():
         for f in as_completed(futs.keys(), timeout=600):
             ch = futs[f]
             try:
-                ok = bool(f.result())
+                res = f.result()
             except Exception:
-                ok = False
-            if ok:
+                res = 'dead'
+            if is_ok(res):
                 survivors.append(ch)
                 DEAD_ONCE.discard(ch['url'])
             else:
@@ -1196,7 +1211,7 @@ def health_sweep():
                 else:
                     DEAD_ONCE.add(ch['url'])
                     survivors.append(ch)
-            brain.record(ch.get('host', urlparse(ch['url']).netloc), ok)
+            brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
     except TimeoutError:
         logger.warning("⏳ Таймаут проверки здоровья")
     except Exception as e:
@@ -1343,9 +1358,10 @@ def update_cache():
                 checked += 1
                 ch = futs[f]
                 try:
-                    ok = bool(f.result())
+                    res = f.result()
                 except Exception:
-                    ok = False
+                    res = 'dead'
+                ok = is_ok(res)
                 if ok and ch['url'] not in alive_urls:
                     nk = norm_name(ch['name'])
                     if nk not in alive_names:
@@ -1416,7 +1432,7 @@ h1{margin:0 0 8px;font-size:32px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
 <h1>🇷 IPTV Russia Pro MAX 🧠</h1>
-<div class="sub">📥 Прямой плейлист (рабочий) • 📡 PROXY по ?proxy=1 • 🧠 Ирочка</div>
+<div class="sub">📥 Прямой плейлист • 📡 PROXY по ?proxy=1 • 🧠 Ирочка • гео-блок ≠ смерть</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист (основной)</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
