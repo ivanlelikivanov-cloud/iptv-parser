@@ -6,22 +6,21 @@ import sqlite3
 import threading
 import requests
 from flask import Flask, Response, jsonify, request
-from concurrent.futures import ThreadPoolExecutor
-import google.generativeai as genai  # legacy, легче и стабильнее
+import google.generativeai as genai  # legacy, лёгкий и стабильный
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== КОНФИГ (безопасные значения для Free) ====================
+# ==================== КОНФИГ (оптимизировано под Free) ====================
 CHECK_TIMEOUT = 10.0
-CHECK_WORKERS = 8          # уменьшил, чтобы не жрать CPU
+CHECK_WORKERS = 8
 DB_PATH = "iptv_cache.db"
 UPDATE_EVERY = 86400
 MAX_CHANNELS = 12000
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6Lw19kWOXjhPKhsEjMbhPNyRISGv3di_XKn2-P39xTxrQ")
 
-# ==================== ИИ (Gemini — но без реального ключа, работает идеально) ====================
+# ==================== ИИ (Gemini — лёгкий legacy) ====================
 genai.configure(api_key=GEMINI_API_KEY)
 
 def classify_channel(name: str, url: str) -> dict:
@@ -40,7 +39,7 @@ def classify_channel(name: str, url: str) -> dict:
     except:
         return {"group_title": "Региональные", "language": "ru", "safe": True}
 
-# ==================== ФИЛЬТР И ПРОВЕРКА (оптимизировано) ====================
+# ==================== ФИЛЬТР И ПРОВЕРКА (лёгкие) ====================
 def is_russian_advanced(name: str, url: str) -> bool:
     n = name.lower()
     u = url.lower()
@@ -128,7 +127,7 @@ def run_full_update():
     c.executemany("INSERT OR REPLACE INTO channels (name, url, group_title) VALUES (?, ?, ?)", final_channels)
     conn.commit()
 
-    m3u = "#EXTM3U\n# IPTV Russia Pro — только российские каналы + Gemini ИИ (исправлено под Free)\n# Обновлено: " + time.strftime("%Y-%m-%d %H:%M") + "\n"
+    m3u = "#EXTM3U\n# IPTV Russia Pro — только российские каналы + Gemini (legacy, Free)\n# Обновлено: " + time.strftime("%Y-%m-%d %H:%M") + "\n"
     for name, url, group in final_channels:
         m3u += f'#EXTINF:0 tvg-chno="{time.strftime("%Y-%m-%d %H:%M")}" group-title="{group}",{name}\n{url}\n'
 
@@ -144,7 +143,7 @@ def scheduler():
 
 @app.route('/')
 def index():
-    return "🚀 IPTV Russia Pro с исправленным Gemini (Free tier) работает! Открой /playlist.m3u"
+    return "🚀 IPTV Russia Pro с исправленным Gemini (legacy, Free tier) работает! Открой /playlist.m3u"
 
 @app.route('/playlist.m3u')
 def playlist():
