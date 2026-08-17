@@ -6,13 +6,14 @@ import sqlite3
 import threading
 import requests
 from flask import Flask, Response, jsonify, request
-import google.generativeai as genai  # legacy, лёгкий и стабильный
+from concurrent.futures import ThreadPoolExecutor
+import google.generativeai as genai
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== КОНФИГ (оптимизировано под Free) ====================
+# ==================== КОНФИГ (Free tier) ====================
 CHECK_TIMEOUT = 10.0
 CHECK_WORKERS = 8
 DB_PATH = "iptv_cache.db"
@@ -20,7 +21,7 @@ UPDATE_EVERY = 86400
 MAX_CHANNELS = 12000
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6Lw19kWOXjhPKhsEjMbhPNyRISGv3di_XKn2-P39xTxrQ")
 
-# ==================== ИИ (Gemini — лёгкий legacy) ====================
+# ==================== ИИ (Gemini — legacy, лёгкий) ====================
 genai.configure(api_key=GEMINI_API_KEY)
 
 def classify_channel(name: str, url: str) -> dict:
@@ -29,24 +30,21 @@ def classify_channel(name: str, url: str) -> dict:
 1. Основная группа (group-title): федеральный / московский / питерский / спортивный / сериалы / фильмы / новости / региональные / кино / другие
 2. Язык: всегда русский
 3. Безопасность: если 18+ / adult / blocked — пропустить
-Верни ТОЛЬКО JSON:
-{{"group_title": "...", "language": "ru", "safe": true}}
+Верни ТОЛЬКО JSON: {{"group_title": "...", "language": "ru", "safe": true}}
 """
     try:
         response = genai.GenerativeModel('gemini-3.6-flash').generate_content(prompt)
         res = response.text.strip()
-        return eval(res)  # безопасно для этого случая
+        return eval(res)
     except:
         return {"group_title": "Региональные", "language": "ru", "safe": True}
 
-# ==================== ФИЛЬТР И ПРОВЕРКА (лёгкие) ====================
+# ==================== ФИЛЬТР И ПРОВЕРКА ====================
 def is_russian_advanced(name: str, url: str) -> bool:
     n = name.lower()
     u = url.lower()
-    if any(x in u for x in ["18+", "adult", "blocked", "roskom", "zablok"]):
-        return False
-    if re.search(r'[а-яёА-ЯЁ]', name) or any(x in u for x in ["ru", "россия", ".ru", "russia"]):
-        return True
+    if any(x in u for x in ["18+", "adult", "blocked", "roskom", "zablok"]): return False
+    if re.search(r'[а-яёА-ЯЁ]', name) or any(x in u for x in ["ru", "россия", ".ru", "russia"]): return True
     return False
 
 def check_channel(name: str, url: str) -> bool:
@@ -93,8 +91,7 @@ def run_full_update():
     for src in new_sources:
         try:
             r = requests.get(src, timeout=15)
-            if r.status_code != 200:
-                continue
+            if r.status_code != 200: continue
             data = r.text
             for line in data.splitlines():
                 line = line.strip()
@@ -127,7 +124,7 @@ def run_full_update():
     c.executemany("INSERT OR REPLACE INTO channels (name, url, group_title) VALUES (?, ?, ?)", final_channels)
     conn.commit()
 
-    m3u = "#EXTM3U\n# IPTV Russia Pro — только российские каналы + Gemini (legacy, Free)\n# Обновлено: " + time.strftime("%Y-%m-%d %H:%M") + "\n"
+    m3u = "#EXTM3U\n# IPTV Russia Pro — только российские каналы + Gemini ИИ\n# Обновлено: " + time.strftime("%Y-%m-%d %H:%M") + "\n"
     for name, url, group in final_channels:
         m3u += f'#EXTINF:0 tvg-chno="{time.strftime("%Y-%m-%d %H:%M")}" group-title="{group}",{name}\n{url}\n'
 
@@ -143,7 +140,7 @@ def scheduler():
 
 @app.route('/')
 def index():
-    return "🚀 IPTV Russia Pro с исправленным Gemini (legacy, Free tier) работает! Открой /playlist.m3u"
+    return "🚀 IPTV Russia Pro с Gemini (твой ключ вставлен) работает! Открой /playlist.m3u"
 
 @app.route('/playlist.m3u')
 def playlist():
@@ -164,7 +161,7 @@ def status():
 @app.route('/dashboard')
 def dashboard():
     return f"""
-    <h1>IPTV Russia Pro с исправленным Gemini (Free tier)</h1>
+    <h1>IPTV Russia Pro с Gemini (твой ключ вставлен)</h1>
     <p><strong>Каналов:</strong> {alive_list}</p>
     <p><strong>Источников:</strong> {len(search_new_sources())}</p>
     <p><strong>Последнее обновление:</strong> {time.strftime("%Y-%m-%d %H:%M:%S")}</p>
