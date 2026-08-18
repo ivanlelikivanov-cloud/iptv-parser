@@ -64,10 +64,14 @@ SOURCES = [
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+    
+    # Дополнительные
+    "https://m3u.su/m3u/ru.m3u",
+    "https://m3u.su/m3u/sng.m3u",
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://webarmen.com/my/iptv/auto.m3u",
+    "https://smolnp.github.io/IPTVru/IPTVru.m3u",
 ]
-
-playlist_cache = "#EXTM3U\n# Загрузка...\n"
-is_loading = False
 
 # ==================== РАСШИРЕННЫЕ КАТЕГОРИИ ====================
 CATEGORIES = {
@@ -154,18 +158,19 @@ CATEGORIES = {
     ]
 }
 
+playlist_cache = "#EXTM3U\n# Загрузка...\n"
+is_loading = False
+
 def get_category(name):
     n = name.lower()
-    # Проверяем каждую категорию
     for cat, keywords in CATEGORIES.items():
         if any(kw in n for kw in keywords):
             return cat
-    # Если есть русские буквы, но категория не найдена
     if re.search(r'[\u0400-\u04FF]', name):
         return 'Общие'
     return 'Общие'
 
-# ==================== ЗАГРУЗКА ====================
+# ==================== ЗАГРУЗКА ПЛЕЙЛИСТА ====================
 def load_playlist():
     global playlist_cache, is_loading
     if is_loading:
@@ -180,7 +185,6 @@ def load_playlist():
     loaded = 0
     failed = 0
     
-    # Загружаем все источники параллельно
     with ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(requests.get, url, timeout=15, verify=False, headers={'User-Agent': 'Mozilla/5.0'}): url for url in SOURCES}
         
@@ -192,7 +196,6 @@ def load_playlist():
                     loaded += 1
                     logger.info(f"✅ [{loaded}] Загружен: {url.split('/')[-1][:30]}")
                     
-                    # Парсим
                     lines = r.text.splitlines()
                     current_name = ''
                     
@@ -207,35 +210,29 @@ def load_playlist():
                         elif line.startswith('http') and current_name:
                             url_ch = line
                             
-                            # Фильтры
                             if url_ch in seen:
                                 current_name = ''
                                 continue
                             
-                            # Только русские
                             if not re.search(r'[а-яёА-ЯЁ]', current_name):
                                 current_name = ''
                                 continue
                             
-                            # Проверка на украинский
                             ua_words = ['україн', 'украин', 'київ', 'kyiv', 'львів', 'харків', 'суспільне']
                             if any(w in current_name.lower() for w in ua_words):
                                 current_name = ''
                                 continue
                             
-                            # Блокировка платных
                             paywall = ['wink', 'rt.ru', 'tvigle', 'megogo', 'okko', 'ivi', 'start.ru', 'more.tv']
                             if any(x in url_ch.lower() for x in paywall):
                                 current_name = ''
                                 continue
                             
-                            # Блокировка радио
                             if any(x in current_name.lower() for x in ['радио', 'radio', 'fm']):
                                 current_name = ''
                                 continue
                             
                             seen.add(url_ch)
-                            
                             cat = get_category(current_name)
                             key = re.sub(r'\s+', ' ', current_name.lower().strip())
                             
@@ -250,7 +247,7 @@ def load_playlist():
                             
                 else:
                     failed += 1
-                    if failed <= 5:  # Логируем только первые 5 ошибок
+                    if failed <= 5:
                         logger.warning(f"❌ Ошибка: {url.split('/')[-1][:30]} (статус {r.status_code})")
             except Exception as e:
                 failed += 1
@@ -265,7 +262,6 @@ def load_playlist():
         is_loading = False
         return
     
-    # Сортируем
     cat_order = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 
                  'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 
                  'Региональные', 'Общие']
@@ -273,11 +269,9 @@ def load_playlist():
     sorted_channels = sorted(entries.values(), 
                             key=lambda ch: (cat_order.index(ch['cat']) if ch['cat'] in cat_order else 99, ch['name']))
     
-    # Ограничиваем до 5000
     if len(sorted_channels) > 5000:
         sorted_channels = sorted_channels[:5000]
     
-    # Считаем категории
     cat_counts = {}
     for ch in sorted_channels:
         cat_counts[ch['cat']] = cat_counts.get(ch['cat'], 0) + 1
@@ -301,7 +295,56 @@ def load_playlist():
     logger.info(f"📊 КАТЕГОРИИ: {cat_counts}")
     is_loading = False
 
-# ==================== ВЕБ ====================
+# ==================== ПОИСК НОВЫХ ИСТОЧНИКОВ ====================
+def discover_new_sources():
+    """Автоматический поиск новых источников через DuckDuckGo"""
+    logger.info("🔍 Поиск новых источников...")
+    queries = [
+        'iptv m3u russia 2026',
+        'плейлист iptv россия бесплатно',
+        'iptv playlist russian channels',
+        'm3u playlist russia free',
+        'iptv ru m3u8 список каналов',
+        'бесплатный iptv плейлист россия',
+        'iptv channels russia m3u',
+        'список каналов iptv россия m3u'
+    ]
+    
+    new_sources = []
+    for q in queries[:3]:  # Ограничиваем для скорости
+        try:
+            r = requests.get('https://html.duckduckgo.com/html/', 
+                           params={'q': q}, 
+                           headers={'User-Agent': 'Mozilla/5.0'},
+                           timeout=10)
+            if r.status_code == 200:
+                urls = re.findall(r'(https?://[^\s"\']+\.m3u8?)', r.text, re.I)
+                for url in urls:
+                    if 'iptv' in url.lower() and url not in SOURCES:
+                        SOURCES.append(url)
+                        new_sources.append(url)
+        except:
+            pass
+    
+    if new_sources:
+        logger.info(f"🔍 Найдено новых источников: {len(new_sources)}")
+    return new_sources
+
+def background_worker():
+    """Фоновый процесс: обновление каждые 6 часов"""
+    while True:
+        try:
+            logger.info("⏰ Плановое обновление...")
+            # Ищем новые источники
+            discover_new_sources()
+            # Обновляем плейлист
+            load_playlist()
+        except Exception as e:
+            logger.error(f"💥 Фоновая ошибка: {e}")
+        logger.info(f"⏰ Следующее обновление через 6 часов")
+        time.sleep(21600)  # 6 часов
+
+# ==================== ВЕБ-ЭНДПОИНТЫ ====================
 @app.route('/')
 def home():
     count = len([l for l in playlist_cache.split('\n') if l.startswith('http')])
@@ -322,7 +365,10 @@ def home():
             .green {{ background: #4caf50; color: #fff; }}
             .blue {{ background: #2196f3; color: #fff; }}
             .gray {{ background: #607d8b; color: #fff; }}
+            .orange {{ background: #ff9800; color: #fff; }}
             .info {{ font-size: 12px; opacity: .6; margin-top: 15px; }}
+            .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 10px 0; font-size: 12px; }}
+            .stats-grid div {{ background: rgba(255,255,255,.05); padding: 4px 8px; border-radius: 5px; }}
         </style>
     </head>
     <body>
@@ -335,6 +381,7 @@ def home():
                 <a href="/playlist.m3u" class="btn green">📥 Скачать</a>
                 <a href="/refresh" class="btn blue">🔄 Обновить</a>
                 <a href="/status" class="btn gray">📊 Статус</a>
+                <a href="/discover" class="btn orange">🔍 Поиск</a>
             </div>
             <div class="info">
                 Источников: {len(SOURCES)} | Загрузка: {'🔄 идёт...' if is_loading else '✅ завершена'}
@@ -357,7 +404,6 @@ def status():
         'channels': count,
         'is_loading': is_loading,
         'sources': len(SOURCES),
-        'sources_loaded': 13,  # Из логов
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
     })
 
@@ -367,6 +413,14 @@ def refresh():
         return jsonify({'status': 'already_loading'})
     threading.Thread(target=load_playlist, daemon=True).start()
     return jsonify({'status': 'refresh_started'})
+
+@app.route('/discover')
+def discover():
+    """Запуск поиска новых источников"""
+    if is_loading:
+        return jsonify({'status': 'already_loading'})
+    threading.Thread(target=discover_new_sources, daemon=True).start()
+    return jsonify({'status': 'discovery_started'})
 
 @app.route('/stats/categories')
 def categories_stats():
@@ -381,9 +435,21 @@ def categories_stats():
                 cats[cat] = cats.get(cat, 0) + 1
     return jsonify(cats)
 
+# ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск на порту {port}")
     logger.info(f"📡 Источников: {len(SOURCES)}")
+    
+    # Первая загрузка
     threading.Thread(target=load_playlist, daemon=True).start()
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    
+    # Фоновый поиск новых источников
+    threading.Thread(target=background_worker, daemon=True).start()
+    
+    # Запуск сервера
+    try:
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=port, threads=8)
+    except ImportError:
+        app.run(host='0.0.0.0', port=port, threaded=True)
