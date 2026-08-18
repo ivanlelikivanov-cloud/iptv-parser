@@ -11,15 +11,15 @@ from urllib.parse import urlparse, urljoin
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# Отключаем SSL предупреждения только для проблемных источников
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==================== ПРОВЕРЕННЫЕ ИСТОЧНИКИ (ОСНОВА) ====================
+# ==================== ПРОВЕРЕННЫЕ ИСТОЧНИКИ ====================
 SOURCES = [
-    # iptv-org (основные - дают 600 каналов)
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/languages/tat.m3u",
@@ -71,8 +71,8 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-mag.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-kam.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-chu.m3u",
-    
-    # GitHub проверенные
+    "https://iptv-org.github.io/iptv/regions/ru-sta.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-vgg.m3u",
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
     "https://raw.githubusercontent.com/smolnp/IPTVru/main/IPTVru.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/countries/ru.m3u",
@@ -80,8 +80,6 @@ SOURCES = [
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
-    
-    # Популярные агрегаторы
     "https://m3u.su/m3u/ru.m3u",
     "https://m3u.su/m3u/sng.m3u",
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
@@ -92,7 +90,7 @@ SOURCES = [
     "https://homtv.ru/playlist.m3u",
 ]
 
-# ==================== ФОРУМЫ И САЙТЫ ДЛЯ ПАРСИНГА ====================
+# ==================== ФОРУМЫ ДЛЯ ПАРСИНГА ====================
 FORUM_URLS = [
     "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
     "https://sat-portal.com/plejlisty/",
@@ -107,17 +105,92 @@ channel_count = 0
 is_loading = False
 load_lock = threading.Lock()
 
-# ==================== КАТЕГОРИИ ====================
+# ==================== КАТЕГОРИИ (РАСШИРЕННЫЕ) ====================
 CATEGORIES = {
-    'Новости': ['новост', 'news', '24', 'вести', 'известия', 'информ', 'события', 'репортаж', 'прямой эфир', 'live'],
-    'Спорт': ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'ufc', 'бокс', 'киберспорт', 'баскетбол', 'теннис', 'биатлон', 'khl', 'nhl', 'nba', 'формула', 'mma'],
-    'Кино и сериалы': ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьера', 'боевик', 'детектив', 'мелодрама', 'комедия', 'триллер', 'драма', 'фэнтези', 'фантастика', 'ужас', 'horror', 'мосфильм', 'золотая коллекция', 'коллекция', 'filmbox'],
-    'Детские': ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'nick', 'tiji', 'baby', 'малыш', 'сказк', 'детский', 'children', 'animation'],
-    'Музыка': ['музык', 'music', 'mtv', 'шансон', 'рутв', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'поп', 'рок', 'рэп', 'эстрада'],
-    'Познавательные': ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'космос', 'культур', 'искусств', 'театр', 'музей'],
-    'Развлекательные': ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'игры', 'ток-шоу'],
-    'Региональные': ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'краснодар', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'дагестан', 'грозный', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'сочи', 'минск', 'беларусь', 'алматы', 'астана', 'ташкент', 'бишкек'],
-    'Федеральные': ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24']
+    'Новости': [
+        'новост', 'news', '24', 'вести', 'известия', 'информ', 'события', 'факты',
+        'репортаж', 'интервью', 'обзор', 'итоги', 'главное', 'сегодня', 'сейчас',
+        'прямой эфир', 'live', 'breaking', 'экстрен', 'чп', 'происшеств',
+        'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business'
+    ],
+    'Спорт': [
+        'спорт', 'sport', 'футбол', 'хоккей', 'матч', 'ufc', 'бокс', 
+        'киберспорт', 'esport', 'баскетбол', 'теннис', 'биатлон', 'лыжн',
+        'khl', 'nhl', 'nba', 'формула', 'racing', 'волейбол', 'гандбол',
+        'фигурное катание', 'гимнастика', 'плавание', 'легкая атлетика',
+        'mma', 'единоборства', 'экстрим', 'скейт', 'сноуборд',
+        'match tv', 'match!', 'спорт-1', 'спорт-2', 'спорт 1', 'спорт 2'
+    ],
+    'Кино и сериалы': [
+        'кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 
+        'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион',
+        'премьера', 'боевик', 'детектив', 'мелодрама', 'комедия',
+        'триллер', 'драма', 'приключение', 'вестерн', 'мюзикл',
+        'фэнтези', 'фантастика', 'ужас', 'horror', 'криминал',
+        'исторический', 'военный', 'мосфильм', 'золотая коллекция',
+        'золотой', 'коллекция', 'kinopoisk', 'киномикс', 'киносемья',
+        'кинокомедия', 'кинохит', 'кинопремьера', 'filmbox', 'киноклуб'
+    ],
+    'Детские': [
+        'дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 
+        'аниме', 'nick', 'tiji', 'baby', 'малыш', 'маленький', 'дошкольн',
+        'развивай', 'обучай', 'сказк', 'игруш', 'кукл', 'лего',
+        'детский', 'children', 'animation', 'anime', 'мультик',
+        'мультфильм', 'мультсериал', 'детское кино', 'союзмультфильм'
+    ],
+    'Музыка': [
+        'музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 
+        'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic',
+        'поп', 'рок', 'рэп', 'хип-хоп', 'эстрада', 'фолк', 'кантри',
+        'джаз', 'опера', 'симфони', 'оркестр', 'хор', 'вокал',
+        'muz-tv', 'муз-тв', 'муз тв', 'music box'
+    ],
+    'Познавательные': [
+        'докум', 'doc', 'познав', 'истори', 'history', 'discovery', 
+        'science', 'наука', 'природ', 'animal', 'животн', 'океан', 
+        'космос', 'культур', 'искусств', 'театр', 'музей',
+        'географи', 'биолог', 'астроном', 'физик', 'химия', 'экологи',
+        'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород',
+        'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health',
+        'документальн', 'познавательн', 'образовательн',
+        'national geographic', 'ngc', 'animal planet'
+    ],
+    'Развлекательные': [
+        'развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 
+        'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle',
+        'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game',
+        'лотерея', 'анекдот', 'талант', 'конкурс', 'викторина',
+        'ток-шоу', 'интервью', 'звезд', 'знаменитост',
+        'развлекательн', 'юмористическ', 'прикол', 'смех', 'улыбка'
+    ],
+    'Региональные': [
+        'москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 
+        'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа',
+        'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань',
+        'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток',
+        'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай',
+        'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары',
+        'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ',
+        'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль',
+        'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород',
+        'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда',
+        'архангельск', 'мурманск', 'карелия', 'коми', 'калининград',
+        'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия',
+        'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра',
+        'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск',
+        'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент',
+        'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев',
+        'региональн', 'местн', 'городск', 'губерния', 'областн', 'краев'
+    ],
+    'Федеральные': [
+        'первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 
+        'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница',
+        'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one',
+        'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24',
+        'телеканал', 'федеральн', 'общероссийск',
+        'канал один', 'канал 1', '1 канал', 'channel 1',
+        'россия ртр', 'ртр', 'rtr', 'ren', 'tnt', 'sts'
+    ]
 }
 
 def get_category(name):
@@ -131,7 +204,7 @@ def get_category(name):
 
 def is_russian_channel(name, url):
     if re.search(r'[а-яёА-ЯЁ]', name):
-        ua_words = ['україн', 'украин', 'київ', 'kyiv', 'львів']
+        ua_words = ['україн', 'украин', 'київ', 'kyiv', 'львів', 'харків']
         if any(w in name.lower() for w in ua_words):
             return False
         return True
@@ -140,7 +213,11 @@ def is_russian_channel(name, url):
         return True
     return False
 
-# ==================== ПАРСИНГ ФОРУМОВ ====================
+def normalize_url(url):
+    """Нормализация URL для дедупликации"""
+    return url.rstrip('/').lower()
+
+# ==================== ПАРСИНГ ФОРУМОВ (С УЛУЧШЕННЫМ REGEX) ====================
 def parse_forums_for_sources():
     """Парсит форумы и извлекает ссылки на плейлисты"""
     logger.info("🔍 Парсинг форумов для новых источников...")
@@ -152,155 +229,185 @@ def parse_forums_for_sources():
         try:
             r = session.get(url, timeout=10, verify=False)
             if r.status_code != 200:
+                logger.warning(f"⚠️ Форум {url} вернул статус {r.status_code}")
                 continue
             
             text = r.text
-            m3u_links = re.findall(r'(https?://[^\s"\'<>]+\.m3u8?)', text, re.I)
-            for link in m3u_links:
+            # Улучшенный regex с очисткой от знаков препинания
+            m3u_links = re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)\b', text, re.I)
+            clean_links = [link.rstrip('.,);') for link in m3u_links]
+            
+            for link in clean_links:
                 if 'iptv' in link.lower() or 'playlist' in link.lower():
                     found.append(link)
-            logger.info(f"✅ С форума найдено {len(m3u_links)} ссылок")
+            
+            if clean_links:
+                logger.info(f"✅ С форума {url.split('/')[2]} найдено {len(clean_links)} ссылок")
         except Exception as e:
-            logger.debug(f"Ошибка парсинга {url}: {e}")
+            logger.warning(f"⚠️ Ошибка парсинга {url}: {str(e)[:100]}")
     
     return list(set(found))
 
-# ==================== ЗАГРУЗКА ПЛЕЙЛИСТА ====================
+# ==================== ЗАГРУЗКА ПЛЕЙЛИСТА (С try...finally) ====================
 def load_playlist():
     global playlist_cache, channel_count, is_loading
     
     if not load_lock.acquire(blocking=False):
         logger.info("⏳ Загрузка уже идет, пропускаем...")
         return
-        
+    
     is_loading = True
     logger.info("🚀 НАЧАЛО ЗАГРУЗКИ (проверенные источники + форумы)")
     start_time = time.time()
     
-    # 1. Собираем все источники: проверенные + найденные на форумах
-    all_sources = list(SOURCES)
-    
-    forum_sources = parse_forums_for_sources()
-    for src in forum_sources:
-        if src not in all_sources:
-            all_sources.append(src)
-    
-    logger.info(f"📊 ВСЕГО ИСТОЧНИКОВ: {len(all_sources)}")
-    
-    # 2. Загружаем все источники
-    entries = {}
-    seen = set()
-    loaded = 0
-    failed = 0
-    
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-    
-    retry_strategy = Retry(total=1, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=30, pool_maxsize=30)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    
-    with ThreadPoolExecutor(max_workers=30) as executor:
-        futures = {executor.submit(session.get, url, timeout=20, verify=False): url for url in all_sources}
+    try:
+        # Собираем все источники
+        all_sources = list(SOURCES)
         
-        for future in as_completed(futures):
-            url = futures[future]
-            try:
-                r = future.result()
-                if r.status_code == 200 and r.text:
-                    loaded += 1
-                    if loaded % 10 == 0:
-                        logger.info(f"✅ Загружено {loaded} источников...")
-                    
-                    # Если это HTML - пропускаем (уже спарсили)
-                    if '<html' in r.text[:500].lower():
-                        continue
-                    
-                    lines = r.text.splitlines()
-                    current_name = ''
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
+        # Парсим форумы
+        forum_sources = parse_forums_for_sources()
+        for src in forum_sources:
+            if src not in all_sources:
+                all_sources.append(src)
+                logger.info(f"🔍 Добавлен новый источник: {src[:60]}")
+        
+        logger.info(f"📊 ВСЕГО ИСТОЧНИКОВ: {len(all_sources)}")
+        
+        # Загружаем все источники
+        entries = {}
+        seen = set()
+        loaded = 0
+        failed = 0
+        
+        session = requests.Session()
+        session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        
+        # Retry стратегия
+        retry_strategy = Retry(
+            total=1,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=30, pool_maxsize=30)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = {executor.submit(session.get, url, timeout=20, verify=False): url for url in all_sources}
+            
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    r = future.result()
+                    if r.status_code == 200 and r.text:
+                        loaded += 1
+                        if loaded % 10 == 0:
+                            logger.info(f"✅ Загружено {loaded} источников...")
+                        
+                        # Если это HTML - пропускаем
+                        if '<html' in r.text[:500].lower():
                             continue
-                            
-                        if line.startswith('#EXTINF:'):
-                            parts = line.split(',')
-                            current_name = parts[-1].strip() if len(parts) > 1 else ''
-                        elif not line.startswith('#') and current_name:
-                            url_ch = line
-                            
-                            if url_ch in seen or not is_russian_channel(current_name, url_ch):
-                                current_name = ''
+                        
+                        lines = r.text.splitlines()
+                        current_name = ''
+                        
+                        for line in lines:
+                            line = line.strip()
+                            if not line:
                                 continue
-                            
-                            paywall = ['wink', 'rt.ru', 'tvigle', 'megogo', 'okko', 'ivi', 'start.ru', 'more.tv']
-                            if any(x in url_ch.lower() for x in paywall):
+                                
+                            if line.startswith('#EXTINF:'):
+                                parts = line.split(',')
+                                current_name = parts[-1].strip() if len(parts) > 1 else ''
+                            elif not line.startswith('#') and current_name:
+                                url_ch = line
+                                
+                                # Нормализация URL для дедупликации
+                                normalized_url = normalize_url(url_ch)
+                                if normalized_url in seen:
+                                    current_name = ''
+                                    continue
+                                
+                                if not is_russian_channel(current_name, url_ch):
+                                    current_name = ''
+                                    continue
+                                
+                                paywall = ['wink', 'rt.ru', 'tvigle', 'megogo', 'okko', 'ivi', 'start.ru', 'more.tv']
+                                if any(x in url_ch.lower() for x in paywall):
+                                    current_name = ''
+                                    continue
+                                
+                                if any(x in current_name.lower() for x in ['радио', 'radio', 'fm']):
+                                    current_name = ''
+                                    continue
+                                
+                                seen.add(normalized_url)
+                                cat = get_category(current_name)
+                                key = re.sub(r'\s+', ' ', current_name.lower().strip())
+                                
+                                if key not in entries:
+                                    entries[key] = {
+                                        'url': url_ch,
+                                        'name': current_name,
+                                        'cat': cat,
+                                        'inf': f'#EXTINF:-1 group-title="{cat}",{current_name}'
+                                    }
                                 current_name = ''
-                                continue
-                            
-                            if any(x in current_name.lower() for x in ['радио', 'radio', 'fm']):
-                                current_name = ''
-                                continue
-                            
-                            seen.add(url_ch)
-                            cat = get_category(current_name)
-                            key = re.sub(r'\s+', ' ', current_name.lower().strip())
-                            
-                            if key not in entries:
-                                entries[key] = {
-                                    'url': url_ch,
-                                    'name': current_name,
-                                    'cat': cat,
-                                    'inf': f'#EXTINF:-1 group-title="{cat}",{current_name}'
-                                }
-                            current_name = ''
-            except Exception as e:
-                failed += 1
-    
-    logger.info(f"📊 ЗАГРУЖЕНО: {loaded} источников, ошибок: {failed}")
-    logger.info(f"📊 НАЙДЕНО: {len(entries)} уникальных каналов")
-    
-    if not entries:
-        playlist_cache = "#EXTM3U\n# Нет каналов\n"
-        channel_count = 0
-        return
-    
-    cat_order = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 
-                 'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 
-                 'Региональные', 'Общие']
-    
-    sorted_channels = sorted(entries.values(), 
-                            key=lambda ch: (cat_order.index(ch['cat']) if ch['cat'] in cat_order else 99, ch['name']))
-    
-    if len(sorted_channels) > 5000:
-        sorted_channels = sorted_channels[:5000]
-    
-    cat_counts = {}
-    for ch in sorted_channels:
-        cat_counts[ch['cat']] = cat_counts.get(ch['cat'], 0) + 1
-    
-    lines = [
-        '#EXTM3U',
-        f'# IPTV Russia AI — {time.strftime("%Y-%m-%d %H:%M")}',
-        f'# Всего: {len(sorted_channels)} каналов',
-        f'# Источников: {loaded}',
-        f'# Категории: {", ".join(f"{k}:{v}" for k,v in cat_counts.items())}'
-    ]
-    
-    for ch in sorted_channels:
-        lines.append(ch['inf'])
-        lines.append(ch['url'])
-    
-    playlist_cache = '\n'.join(lines)
-    channel_count = len(sorted_channels)
-    
-    elapsed = time.time() - start_time
-    logger.info(f"✅ ГОТОВО: {channel_count} каналов за {elapsed:.1f}с")
-    logger.info(f"📊 КАТЕГОРИИ: {cat_counts}")
-    is_loading = False
-    load_lock.release()
+                except Exception as e:
+                    failed += 1
+        
+        logger.info(f"📊 ЗАГРУЖЕНО: {loaded} источников, ошибок: {failed}")
+        logger.info(f"📊 НАЙДЕНО: {len(entries)} уникальных каналов")
+        
+        if not entries:
+            playlist_cache = "#EXTM3U\n# Нет каналов\n"
+            channel_count = 0
+            return
+        
+        # Сортировка по категориям
+        cat_order = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 
+                     'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 
+                     'Региональные', 'Общие']
+        
+        sorted_channels = sorted(entries.values(), 
+                                key=lambda ch: (cat_order.index(ch['cat']) if ch['cat'] in cat_order else 99, ch['name']))
+        
+        # Увеличил лимит до 15000 (вместо 5000)
+        if len(sorted_channels) > 15000:
+            sorted_channels = sorted_channels[:15000]
+        
+        cat_counts = {}
+        for ch in sorted_channels:
+            cat_counts[ch['cat']] = cat_counts.get(ch['cat'], 0) + 1
+        
+        lines = [
+            '#EXTM3U',
+            f'# IPTV Russia AI — {time.strftime("%Y-%m-%d %H:%M")}',
+            f'# Всего: {len(sorted_channels)} каналов',
+            f'# Источников: {loaded}',
+            f'# Категории: {", ".join(f"{k}:{v}" for k,v in cat_counts.items())}'
+        ]
+        
+        for ch in sorted_channels:
+            lines.append(ch['inf'])
+            lines.append(ch['url'])
+        
+        playlist_cache = '\n'.join(lines)
+        channel_count = len(sorted_channels)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"✅ ГОТОВО: {channel_count} каналов за {elapsed:.1f}с")
+        logger.info(f"📊 КАТЕГОРИИ: {cat_counts}")
+        
+    except Exception as e:
+        logger.error(f"💥 Критическая ошибка загрузки: {e}")
+        # В случае ошибки не оставляем плейлист пустым
+        if not playlist_cache or playlist_cache == "#EXTM3U\n# Загрузка...\n":
+            playlist_cache = "#EXTM3U\n# Ошибка загрузки. Попробуйте /refresh\n"
+    finally:
+        # ВАЖНО: освобождаем блокировку в любом случае
+        is_loading = False
+        load_lock.release()
 
 # ==================== ФОНОВЫЙ ПРОЦЕСС ====================
 def background_worker():
@@ -310,9 +417,9 @@ def background_worker():
         except Exception as e:
             logger.error(f"💥 Фоновая ошибка: {e}")
         logger.info(f"⏰ Следующее обновление через 6 часов")
-        time.sleep(21600)
+        time.sleep(21600)  # 6 часов
 
-# ==================== ВЕБ ====================
+# ==================== ВЕБ-ИНТЕРФЕЙС ====================
 @app.route('/')
 def home():
     return f"""
@@ -324,8 +431,9 @@ def home():
         <title>IPTV Russia AI</title>
         <style>
             body {{ font-family: system-ui; background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); color: #fff; min-height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center; }}
-            .card {{ background: rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 20px; padding: 40px; max-width: 500px; width: 90%; }}
-            h1 {{ margin: 0; }}
+            .card {{ background: rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 20px; padding: 40px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,.4); }}
+            h1 {{ margin: 0; font-size: 28px; }}
+            .sub {{ opacity: .7; margin: 5px 0 20px; }}
             .stat {{ font-size: 72px; font-weight: bold; margin: 10px 0; background: rgba(255,255,255,.05); border-radius: 15px; padding: 20px; }}
             .btn {{ display: inline-block; padding: 12px 24px; border-radius: 10px; text-decoration: none; font-weight: 600; margin: 5px; }}
             .green {{ background: #4caf50; color: #fff; }}
@@ -337,6 +445,7 @@ def home():
     <body>
         <div class="card">
             <h1>🇷🇺 IPTV Russia</h1>
+            <div class="sub">🧠 AI + парсинг форумов</div>
             <div class="stat">{channel_count}</div>
             <p style="margin: -10px 0 20px;">каналов</p>
             <div>
@@ -344,7 +453,7 @@ def home():
                 <a href="/refresh" class="btn blue">🔄 Обновить</a>
                 <a href="/status" class="btn gray">📊 Статус</a>
             </div>
-            <div class="info">{'🔄 Загрузка...' if is_loading else '✅ Готово'}</div>
+            <div class="info">{'🔄 Загрузка...' if is_loading else '✅ Готово'} • Источников: {len(SOURCES)}</div>
         </div>
     </body>
     </html>
@@ -361,6 +470,7 @@ def status():
     return jsonify({
         'channels': channel_count,
         'is_loading': is_loading,
+        'sources': len(SOURCES),
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
     })
 
@@ -383,12 +493,16 @@ def categories_stats():
                 cats[cat] = cats.get(cat, 0) + 1
     return jsonify(cats)
 
+# ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск на порту {port}")
     logger.info(f"📡 Проверенных источников: {len(SOURCES)}")
     
+    # Запускаем первую загрузку
     threading.Thread(target=load_playlist, daemon=True).start()
+    
+    # Запускаем фоновый воркер
     threading.Thread(target=background_worker, daemon=True).start()
     
     try:
