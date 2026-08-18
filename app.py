@@ -6,14 +6,15 @@ import threading
 import requests
 from flask import Flask, Response, jsonify
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==================== 40+ ИСТОЧНИКОВ ====================
+# ==================== 50+ ИСТОЧНИКОВ ====================
 SOURCES = [
-    # iptv-org (основные)
+    # iptv-org основные
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
     "https://iptv-org.github.io/iptv/languages/rus.m3u",
     "https://iptv-org.github.io/iptv/languages/tat.m3u",
@@ -22,6 +23,15 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/languages/chv.m3u",
     "https://iptv-org.github.io/iptv/languages/udm.m3u",
     "https://iptv-org.github.io/iptv/languages/sah.m3u",
+    "https://iptv-org.github.io/iptv/languages/bel.m3u",
+    "https://iptv-org.github.io/iptv/languages/kaz.m3u",
+    "https://iptv-org.github.io/iptv/languages/uzb.m3u",
+    "https://iptv-org.github.io/iptv/languages/kir.m3u",
+    "https://iptv-org.github.io/iptv/languages/tgk.m3u",
+    "https://iptv-org.github.io/iptv/languages/arm.m3u",
+    "https://iptv-org.github.io/iptv/languages/aze.m3u",
+    "https://iptv-org.github.io/iptv/languages/rum.m3u",
+    "https://iptv-org.github.io/iptv/languages/kat.m3u",
     
     # Категории
     "https://iptv-org.github.io/iptv/categories/news.m3u",
@@ -38,6 +48,14 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/categories/comedy.m3u",
     "https://iptv-org.github.io/iptv/categories/series.m3u",
     "https://iptv-org.github.io/iptv/categories/animation.m3u",
+    "https://iptv-org.github.io/iptv/categories/religious.m3u",
+    "https://iptv-org.github.io/iptv/categories/cooking.m3u",
+    "https://iptv-org.github.io/iptv/categories/health.m3u",
+    "https://iptv-org.github.io/iptv/categories/hobby.m3u",
+    "https://iptv-org.github.io/iptv/categories/home.m3u",
+    "https://iptv-org.github.io/iptv/categories/business.m3u",
+    "https://iptv-org.github.io/iptv/categories/relax.m3u",
+    "https://iptv-org.github.io/iptv/categories/science.m3u",
     
     # Регионы РФ
     "https://iptv-org.github.io/iptv/regions/ru-mow.m3u",
@@ -55,6 +73,11 @@ SOURCES = [
     "https://iptv-org.github.io/iptv/regions/ru-kya.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-pri.m3u",
     "https://iptv-org.github.io/iptv/regions/ru-kha.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-amu.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-sak.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-mag.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-kam.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru-chu.m3u",
     
     # GitHub
     "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
@@ -64,6 +87,7 @@ SOURCES = [
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
     "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/index.m3u",
     
     # Дополнительные
     "https://m3u.su/m3u/ru.m3u",
@@ -71,15 +95,20 @@ SOURCES = [
     "https://webarmen.com/my/iptv/auto.nogeo.m3u",
     "https://webarmen.com/my/iptv/auto.m3u",
     "https://smolnp.github.io/IPTVru/IPTVru.m3u",
+    "https://pskovline.tv/tvm3u.php",
 ]
 
-# ==================== РАСШИРЕННЫЕ КАТЕГОРИИ ====================
+playlist_cache = "#EXTM3U\n# Загрузка...\n"
+is_loading = False
+
+# ==================== МАКСИМАЛЬНО РАСШИРЕННЫЕ КАТЕГОРИИ ====================
 CATEGORIES = {
     'Новости': [
         'новост', 'news', '24', 'вести', 'известия', 'информ', 'события', 'факты',
         'репортаж', 'интервью', 'обзор', 'итоги', 'главное', 'сегодня', 'сейчас',
         'прямой эфир', 'live', 'breaking', 'экстрен', 'чп', 'происшеств',
-        'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business'
+        'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business',
+        'utro', 'утро', 'день', 'вечер', 'ночь', 'время', 'новости 24'
     ],
     'Спорт': [
         'спорт', 'sport', 'футбол', 'хоккей', 'матч', 'ufc', 'бокс', 
@@ -87,7 +116,8 @@ CATEGORIES = {
         'khl', 'nhl', 'nba', 'формула', 'racing', 'волейбол', 'гандбол',
         'фигурное катание', 'гимнастика', 'плавание', 'легкая атлетика',
         'mma', 'единоборства', 'экстрим', 'скейт', 'сноуборд',
-        'match tv', 'match!', 'спорт-1', 'спорт-2', 'спорт 1'
+        'match tv', 'match!', 'спорт-1', 'спорт-2', 'спорт 1', 'спорт 2',
+        'sport-1', 'sport-2', 'sport1', 'sport2', 'наш спорт', 'pro спорт'
     ],
     'Кино и сериалы': [
         'кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 
@@ -96,21 +126,23 @@ CATEGORIES = {
         'триллер', 'драма', 'приключение', 'вестерн', 'мюзикл',
         'фэнтези', 'фантастика', 'ужас', 'horror', 'криминал',
         'исторический', 'военный', 'киносвидание', 'киноужас',
-        'kinopoisk', 'киномикс', 'киносемья', 'кинокомедия'
+        'kinopoisk', 'киномикс', 'киносемья', 'кинокомедия',
+        'кинохит', 'кинопремьера', 'киношедевр', 'film zone'
     ],
     'Детские': [
         'дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 
         'аниме', 'nick', 'tiji', 'baby', 'малыш', 'маленький', 'дошкольн',
         'развивай', 'обучай', 'сказк', 'игруш', 'кукл', 'лего',
         'peppa', 'папа', 'мама', 'няня', 'школа', 'класс',
-        'детский', 'children', 'animation', 'anime', 'gulli'
+        'детский', 'children', 'animation', 'anime', 'gulli',
+        'познавай', 'учись', 'расти', 'малыши', 'карапуз', 'кроха'
     ],
     'Музыка': [
         'музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 
         'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic',
         'поп', 'рок', 'рэп', 'хип-хоп', 'эстрада', 'фолк', 'кантри',
         'джаз', 'опера', 'симфони', 'оркестр', 'хор', 'вокал',
-        'muz-tv', 'муз-тв', 'муз тв'
+        'muz-tv', 'муз-тв', 'муз тв', 'music box', 'звук', 'песня'
     ],
     'Познавательные': [
         'докум', 'doc', 'познав', 'истори', 'history', 'discovery', 
@@ -119,7 +151,8 @@ CATEGORIES = {
         'географи', 'биолог', 'астроном', 'физик', 'химия', 'экологи',
         'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород',
         'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health',
-        'документальн', 'познавательн', 'образовательн'
+        'документальн', 'познавательн', 'образовательн',
+        'national geographic', 'ngc', 'animal planet'
     ],
     'Развлекательные': [
         'развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 
@@ -127,7 +160,7 @@ CATEGORIES = {
         'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game',
         'лотерея', 'анекдот', 'талант', 'конкурс', 'викторина',
         'ток-шоу', 'интервью', 'звезд', 'знаменитост',
-        'развлекательн', 'юмористическ'
+        'развлекательн', 'юмористическ', 'прикол', 'смех', 'улыбка'
     ],
     'Региональные': [
         'москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 
@@ -146,7 +179,7 @@ CATEGORIES = {
         'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск',
         'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент',
         'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев',
-        'региональн', 'местн', 'городск', 'губерния'
+        'региональн', 'местн', 'городск', 'губерния', 'областн', 'краев'
     ],
     'Федеральные': [
         'первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 
@@ -154,21 +187,44 @@ CATEGORIES = {
         'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one',
         'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24',
         'телеканал', 'федеральн', 'общероссийск',
-        'канал один', 'канал 1', '1 канал', 'channel 1'
+        'канал один', 'канал 1', '1 канал', 'channel 1',
+        'россия ртр', 'ртр', 'rtr', 'ren', 'tnt', 'sts'
     ]
 }
 
-playlist_cache = "#EXTM3U\n# Загрузка...\n"
-is_loading = False
-
 def get_category(name):
     n = name.lower()
+    # Проверяем все категории
     for cat, keywords in CATEGORIES.items():
         if any(kw in n for kw in keywords):
             return cat
+    # Если есть русские буквы
     if re.search(r'[\u0400-\u04FF]', name):
         return 'Общие'
     return 'Общие'
+
+def is_russian_channel(name, url):
+    """Проверка что канал русский"""
+    # Проверяем по названию
+    if re.search(r'[а-яёА-ЯЁ]', name):
+        # Исключаем украинские
+        ua_words = ['україн', 'украин', 'київ', 'kyiv', 'львів', 'харків', 'суспільне']
+        if any(w in name.lower() for w in ua_words):
+            return False
+        return True
+    
+    # Проверяем по домену
+    domain = urlparse(url).netloc.lower()
+    ru_domains = ['.ru', '.su', '.рф', 'russian', 'russia', 'ru-']
+    if any(d in domain for d in ru_domains):
+        return True
+    
+    # Проверяем по URL
+    ru_keywords = ['ru/', '/ru-', '-ru', 'russia', 'russian']
+    if any(kw in url.lower() for kw in ru_keywords):
+        return True
+    
+    return False
 
 # ==================== ЗАГРУЗКА ПЛЕЙЛИСТА ====================
 def load_playlist():
@@ -177,7 +233,7 @@ def load_playlist():
         return
     
     is_loading = True
-    logger.info("🚀 НАЧАЛО ЗАГРУЗКИ (40+ источников)")
+    logger.info("🚀 НАЧАЛО ЗАГРУЗКИ (50+ источников)")
     start_time = time.time()
     
     entries = {}
@@ -185,7 +241,7 @@ def load_playlist():
     loaded = 0
     failed = 0
     
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=25) as executor:
         futures = {executor.submit(requests.get, url, timeout=15, verify=False, headers={'User-Agent': 'Mozilla/5.0'}): url for url in SOURCES}
         
         for future in as_completed(futures):
@@ -210,25 +266,24 @@ def load_playlist():
                         elif line.startswith('http') and current_name:
                             url_ch = line
                             
+                            # Базовые фильтры
                             if url_ch in seen:
                                 current_name = ''
                                 continue
                             
-                            if not re.search(r'[а-яёА-ЯЁ]', current_name):
+                            # Проверка на русский
+                            if not is_russian_channel(current_name, url_ch):
                                 current_name = ''
                                 continue
                             
-                            ua_words = ['україн', 'украин', 'київ', 'kyiv', 'львів', 'харків', 'суспільне']
-                            if any(w in current_name.lower() for w in ua_words):
-                                current_name = ''
-                                continue
-                            
-                            paywall = ['wink', 'rt.ru', 'tvigle', 'megogo', 'okko', 'ivi', 'start.ru', 'more.tv']
+                            # Блокировка платных
+                            paywall = ['wink', 'rt.ru', 'tvigle', 'megogo', 'okko', 'ivi', 'start.ru', 'more.tv', 'kion.ru']
                             if any(x in url_ch.lower() for x in paywall):
                                 current_name = ''
                                 continue
                             
-                            if any(x in current_name.lower() for x in ['радио', 'radio', 'fm']):
+                            # Блокировка радио
+                            if any(x in current_name.lower() for x in ['радио', 'radio', 'fm', 'эфир']):
                                 current_name = ''
                                 continue
                             
@@ -247,11 +302,11 @@ def load_playlist():
                             
                 else:
                     failed += 1
-                    if failed <= 5:
-                        logger.warning(f"❌ Ошибка: {url.split('/')[-1][:30]} (статус {r.status_code})")
+                    if failed <= 10:
+                        logger.warning(f"⚠️ Ошибка: {url.split('/')[-1][:30]} (статус {r.status_code})")
             except Exception as e:
                 failed += 1
-                if failed <= 5:
+                if failed <= 10:
                     logger.error(f"❌ Исключение: {url.split('/')[-1][:30]} - {str(e)[:50]}")
     
     logger.info(f"📊 ЗАГРУЖЕНО: {loaded} источников, ошибок: {failed}")
@@ -262,6 +317,7 @@ def load_playlist():
         is_loading = False
         return
     
+    # Сортировка по категориям
     cat_order = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 
                  'Детские', 'Музыка', 'Познавательные', 'Развлекательные', 
                  'Региональные', 'Общие']
@@ -269,16 +325,19 @@ def load_playlist():
     sorted_channels = sorted(entries.values(), 
                             key=lambda ch: (cat_order.index(ch['cat']) if ch['cat'] in cat_order else 99, ch['name']))
     
+    # Ограничиваем до 5000
     if len(sorted_channels) > 5000:
         sorted_channels = sorted_channels[:5000]
     
+    # Считаем категории
     cat_counts = {}
     for ch in sorted_channels:
         cat_counts[ch['cat']] = cat_counts.get(ch['cat'], 0) + 1
     
+    # Формируем плейлист
     lines = [
         '#EXTM3U',
-        f'# IPTV Russia AI PRO — {time.strftime("%Y-%m-%d %H:%M")}',
+        f'# IPTV Russia AI PRO MAX — {time.strftime("%Y-%m-%d %H:%M")}',
         f'# Всего: {len(sorted_channels)} каналов',
         f'# Источников: {loaded}',
         f'# Категории: {", ".join(f"{k}:{v}" for k,v in cat_counts.items())}'
@@ -297,8 +356,11 @@ def load_playlist():
 
 # ==================== ПОИСК НОВЫХ ИСТОЧНИКОВ ====================
 def discover_new_sources():
-    """Автоматический поиск новых источников через DuckDuckGo"""
+    """Автоматический поиск новых источников через поисковики"""
     logger.info("🔍 Поиск новых источников...")
+    new_sources = []
+    
+    # Поиск через DuckDuckGo
     queries = [
         'iptv m3u russia 2026',
         'плейлист iptv россия бесплатно',
@@ -307,27 +369,29 @@ def discover_new_sources():
         'iptv ru m3u8 список каналов',
         'бесплатный iptv плейлист россия',
         'iptv channels russia m3u',
-        'список каналов iptv россия m3u'
+        'актуальный плейлист iptv 2026'
     ]
     
-    new_sources = []
-    for q in queries[:3]:  # Ограничиваем для скорости
+    for q in queries[:4]:
         try:
             r = requests.get('https://html.duckduckgo.com/html/', 
                            params={'q': q}, 
                            headers={'User-Agent': 'Mozilla/5.0'},
                            timeout=10)
             if r.status_code == 200:
+                # Ищем ссылки на плейлисты
                 urls = re.findall(r'(https?://[^\s"\']+\.m3u8?)', r.text, re.I)
+                urls += re.findall(r'(https?://[^\s"\']+\.m3u)', r.text, re.I)
                 for url in urls:
                     if 'iptv' in url.lower() and url not in SOURCES:
                         SOURCES.append(url)
                         new_sources.append(url)
+                        logger.info(f"🔍 Найден новый источник: {url[:60]}")
         except:
             pass
     
     if new_sources:
-        logger.info(f"🔍 Найдено новых источников: {len(new_sources)}")
+        logger.info(f"🔍 Всего найдено новых источников: {len(new_sources)}")
     return new_sources
 
 def background_worker():
@@ -354,27 +418,25 @@ def home():
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>IPTV Russia AI PRO</title>
+        <title>IPTV Russia AI PRO MAX</title>
         <style>
             body {{ font-family: system-ui; background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); color: #fff; min-height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center; }}
-            .card {{ background: rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 20px; padding: 40px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,.4); }}
+            .card {{ background: rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 20px; padding: 40px; max-width: 550px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,.4); }}
             h1 {{ margin: 0; font-size: 28px; }}
             .sub {{ opacity: .7; margin: 5px 0 20px; }}
-            .stat {{ font-size: 64px; font-weight: bold; margin: 10px 0; background: rgba(255,255,255,.05); border-radius: 15px; padding: 20px; }}
+            .stat {{ font-size: 72px; font-weight: bold; margin: 10px 0; background: rgba(255,255,255,.05); border-radius: 15px; padding: 20px; }}
             .btn {{ display: inline-block; padding: 12px 24px; border-radius: 10px; text-decoration: none; font-weight: 600; margin: 5px; }}
             .green {{ background: #4caf50; color: #fff; }}
             .blue {{ background: #2196f3; color: #fff; }}
             .gray {{ background: #607d8b; color: #fff; }}
             .orange {{ background: #ff9800; color: #fff; }}
             .info {{ font-size: 12px; opacity: .6; margin-top: 15px; }}
-            .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 10px 0; font-size: 12px; }}
-            .stats-grid div {{ background: rgba(255,255,255,.05); padding: 4px 8px; border-radius: 5px; }}
         </style>
     </head>
     <body>
         <div class="card">
             <h1>🇷🇺 IPTV Russia</h1>
-            <div class="sub">🧠 AI + 40+ источников</div>
+            <div class="sub">🧠 AI PRO MAX • 50+ источников</div>
             <div class="stat">{count}</div>
             <p style="margin: -10px 0 20px;">каналов</p>
             <div>
@@ -395,7 +457,7 @@ def home():
 @app.route('/playlist.m3u8')
 def playlist():
     return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl',
-                   headers={'Content-Disposition': 'attachment; filename="iptv_russia_pro.m3u"'})
+                   headers={'Content-Disposition': 'attachment; filename="iptv_russia_pro_max.m3u"'})
 
 @app.route('/status')
 def status():
@@ -416,7 +478,6 @@ def refresh():
 
 @app.route('/discover')
 def discover():
-    """Запуск поиска новых источников"""
     if is_loading:
         return jsonify({'status': 'already_loading'})
     threading.Thread(target=discover_new_sources, daemon=True).start()
@@ -424,7 +485,6 @@ def discover():
 
 @app.route('/stats/categories')
 def categories_stats():
-    """Детальная статистика по категориям"""
     lines = playlist_cache.split('\n')
     cats = {}
     for line in lines:
