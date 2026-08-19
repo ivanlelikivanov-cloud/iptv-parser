@@ -18,12 +18,12 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==================== 300+ ИСТОЧНИКОВ ====================
+# ==================== 350+ ИСТОЧНИКОВ (РАСШИРЕННЫЙ СПИСОК) ====================
 def generate_sources():
-    """Генерация 300+ источников"""
+    """Генерация 350+ источников"""
     sources = []
     
-    # 1. iptv-org (все возможные)
+    # --- 1. iptv-org (все возможные) ---
     iptv_base = "https://iptv-org.github.io/iptv"
     langs = ['rus', 'tat', 'che', 'bak', 'chv', 'udm', 'sah', 'bel', 'kaz', 'uzb', 'kir', 'tgk', 'arm', 'aze', 'rum', 'kat']
     categories = ['news', 'sports', 'movies', 'kids', 'music', 'documentary', 'entertainment', 
@@ -35,25 +35,20 @@ def generate_sources():
                'bry', 'krs', 'bel', 'klu', 'rzn', 'vla', 'iva', 'kos', 'vlg', 'ark', 'mur', 'krl', 
                'kom', 'kgd', 'psk', 'nov', 'smo', 'ykt', 'yku', 'bur', 'sah', 'mag', 'kam', 'chu']
     
-    # Языки
     for lang in langs:
         sources.append(f"{iptv_base}/languages/{lang}.m3u")
-    
-    # Категории
     for cat in categories:
         sources.append(f"{iptv_base}/categories/{cat}.m3u")
-    
-    # Регионы
     for reg in regions:
         sources.append(f"{iptv_base}/regions/ru-{reg}.m3u")
     
-    # 2. GitHub репозитории (все возможные)
+    # --- 2. GitHub репозитории ---
     github_repos = [
         '4mirror/iptv', 'smolnp/IPTVru', 'iptv-org/iptv', 'Free-iptv/iptv',
         'Free-TV/IPTV', 'DenMSU/tv', 'aksy007/iptv', 'tv-lists/tv-lists',
-        'malyys/iptv', 'iptv-org/iptv', 'fanfare/iptv', 'iptv-ru/iptv',
-        'k0ba/iptv', 'zubax/iptv', 'iptvlist/iptv', 'iptv-world/iptv',
-        'm3u4u/iptv', 'iptv-source/iptv', 'iptv-stream/iptv', 'iptv-list/iptv'
+        'malyys/iptv', 'fanfare/iptv', 'iptv-ru/iptv', 'k0ba/iptv', 'zubax/iptv',
+        'iptvlist/iptv', 'iptv-world/iptv', 'm3u4u/iptv', 'iptv-source/iptv',
+        'iptv-stream/iptv', 'iptv-list/iptv', 'iptv-org/iptv'
     ]
     github_paths = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u', 
                     'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'streams/ru.m3u',
@@ -64,21 +59,42 @@ def generate_sources():
             sources.append(f"https://raw.githubusercontent.com/{repo}/master/{path}")
             sources.append(f"https://raw.githubusercontent.com/{repo}/main/{path}")
     
-    # 3. Агрегаторы и сайты
+    # --- 3. Агрегаторы и сайты (РАСШИРЕННЫЙ БЛОК m3u.su) ---
+    m3u_domains = [
+        'm3u.su',
+        'new.m3u.su',
+        'status.m3u.su',
+        'cdn.m3u.su',
+        'api.m3u.su',
+        'play.m3u.su'
+    ]
+    m3u_paths = [
+        '/m3u/ru.m3u', '/m3u/sng.m3u', '/m3u/ua.m3u', '/m3u/by.m3u',
+        '/playlist.m3u', '/iptv.m3u', '/tv.m3u', '/index.m3u',
+        '/list.m3u', '/channels.m3u', '/russia.m3u', '/rus.m3u',
+        '/m3u/ru.m3u8', '/m3u/sng.m3u8', '/playlist.m3u8'
+    ]
+    for domain in m3u_domains:
+        for path in m3u_paths:
+            sources.append(f"https://{domain}{path}")
+            sources.append(f"http://{domain}{path}")
+    
+    # Другие агрегаторы
     aggregators = [
-        'm3u.su/m3u/ru.m3u', 'm3u.su/m3u/sng.m3u', 'webarmen.com/my/iptv/auto.nogeo.m3u',
-        'webarmen.com/my/iptv/auto.m3u', 'smolnp.github.io/IPTVru/IPTVru.m3u',
-        'pskovline.tv/tvm3u.php', '6x6.msk.ru/tv/m3u', 'homtv.ru/playlist.m3u',
+        'webarmen.com/my/iptv/auto.nogeo.m3u', 'webarmen.com/my/iptv/auto.m3u',
+        'smolnp.github.io/IPTVru/IPTVru.m3u', 'pskovline.tv/tvm3u.php',
+        '6x6.msk.ru/tv/m3u', 'homtv.ru/playlist.m3u',
         'iptv-archive.com/playlists/ru.m3u', 'iptv-playlist.org/playlists/russian.m3u',
-        'iptv-list.ru/playlist.m3u', 'iptv-m3u.ru/playlist.m3u', 'iptv4u.ru/playlist.m3u',
-        'tv-list.ru/playlist.m3u', 'iptv.su/playlist.m3u', 'iptv.m3u/playlist.m3u',
+        'iptv-list.ru/playlist.m3u', 'iptv-m3u.ru/playlist.m3u',
+        'iptv4u.ru/playlist.m3u', 'tv-list.ru/playlist.m3u',
+        'iptv.su/playlist.m3u', 'iptv.m3u/playlist.m3u',
         'iptv.ru/playlist.m3u', 'iptvpro.ru/playlist.m3u', 'iptvx.ru/playlist.m3u'
     ]
     for agg in aggregators:
         sources.append(f"https://{agg}")
         sources.append(f"http://{agg}")
     
-    # 4. Telegram каналы
+    # --- 4. Telegram каналы ---
     tg_channels = [
         'iptvru', 'iptv_russia', 'russian_iptv', 'freeiptv_ru', 'iptv_playlist',
         'm3u_playlist', 'iptvfree', 'tv_playlist', 'iptv_rf', 'playlist_iptv',
@@ -88,7 +104,7 @@ def generate_sources():
     for ch in tg_channels:
         sources.append(f"https://t.me/s/{ch}")
     
-    # 5. Форумы и сайты
+    # --- 5. Форумы и сайты ---
     forums = [
         'sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026',
         'sat-portal.com/plejlisty/', 'pikniktv.info/viewtopic.php?t=6737',
@@ -103,8 +119,8 @@ def generate_sources():
         sources.append(f"https://{forum}")
         sources.append(f"http://{forum}")
     
-    # Удаляем дубли
-    sources = list(set(sources))
+    # Удаляем дубли и сортируем
+    sources = sorted(list(set(sources)))
     logger.info(f"📡 Сгенерировано {len(sources)} источников")
     return sources
 
@@ -115,7 +131,7 @@ channel_count = 0
 is_loading = False
 load_lock = threading.Lock()
 
-# ==================== РАСШИРЕННЫЕ КАТЕГОРИИ ====================
+# ==================== КАТЕГОРИИ (РАСШИРЕННЫЕ) ====================
 CATEGORIES = {
     'Новости': [
         'новост', 'news', '24', 'вести', 'известия', 'информ', 'события', 'факты',
@@ -231,7 +247,6 @@ def get_channel_priority(name, url):
     n = name.lower()
     u = url.lower()
     
-    # Приоритет по качеству
     if 'hd' in n or 'fhd' in n or '4k' in n or 'uhd' in n:
         score += 10
     if 'full hd' in n:
@@ -239,7 +254,6 @@ def get_channel_priority(name, url):
     if '720' in n or '1080' in n:
         score += 5
     
-    # Приоритет по популярности
     if 'первый канал' in n or 'россия 1' in n or 'нтв' in n:
         score += 15
     if 'match' in n or 'спорт' in n:
@@ -247,13 +261,11 @@ def get_channel_priority(name, url):
     if 'кино' in n or 'сериал' in n:
         score += 8
     
-    # Приоритет по протоколу
     if 'https' in u:
         score += 5
     if '.m3u8' in u:
         score += 3
     
-    # Приоритет по домену
     if 'iptv-org' in u or 'github' in u:
         score += 5
     if '.ru' in u or '.su' in u:
@@ -275,6 +287,8 @@ def parse_forums_for_sources():
         "https://vse-tv.net/playlists.html",
         "https://forumtv.org/viewforum.php?f=4",
         "https://webos-forums.ru/post167674.html",
+        "https://new.m3u.su",  # Добавил новый сайт
+        "https://m3u.su",      # И основной
     ]
     
     session = requests.Session()
@@ -295,7 +309,7 @@ def parse_forums_for_sources():
                     found.append(link)
             
             if clean_links:
-                logger.info(f"✅ С форума найдено {len(clean_links)} ссылок")
+                logger.info(f"✅ С {url} найдено {len(clean_links)} ссылок")
         except Exception as e:
             logger.debug(f"Ошибка парсинга {url}: {e}")
     
@@ -310,7 +324,7 @@ def load_playlist():
         return
     
     is_loading = True
-    logger.info("🚀 НАЧАЛО ЗАГРУЗКИ (300+ источников)")
+    logger.info("🚀 НАЧАЛО ЗАГРУЗКИ (350+ источников)")
     start_time = time.time()
     
     try:
@@ -321,6 +335,7 @@ def load_playlist():
         for src in forum_sources:
             if src not in all_sources:
                 all_sources.append(src)
+                logger.info(f"🔍 Добавлен новый источник: {src[:80]}")
         
         logger.info(f"📊 ВСЕГО ИСТОЧНИКОВ: {len(all_sources)}")
         
@@ -488,7 +503,7 @@ def home():
     <body>
         <div class="card">
             <h1>🇷🇺 IPTV Russia</h1>
-            <div class="sub">🧠 ULTIMATE • 300+ источников • Умная сортировка</div>
+            <div class="sub">🧠 ULTIMATE • 350+ источников • Умная сортировка</div>
             <div class="stat">{channel_count}</div>
             <p style="margin: -10px 0 20px;">каналов</p>
             <div>
