@@ -23,6 +23,10 @@ app = Flask(__name__)
 
 VERSION = '3.2'
 
+# ==================== ИНИЦИАЛИЗАЦИЯ LOGGER ДО ВСЕГО ====================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
 # ==================== ЗАГРУЗКА КОНФИГА ИЗ JSON ====================
 def load_config():
     """Загружает конфигурацию из sources.json"""
@@ -68,6 +72,7 @@ def load_config():
     
     return default_config
 
+# ==================== ЗАГРУЖАЕМ КОНФИГ ====================
 CONFIG = load_config()
 
 # ==================== ИСТОЧНИКИ ИЗ КОНФИГА ====================
@@ -132,9 +137,6 @@ stats = {
     "last_sweep": None, "sweep_removed": 0, "host_blacklisted": 0,
     "geo_pairs": 0, "geo_rejected": 0,
 }
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger(__name__)
 
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
@@ -278,7 +280,6 @@ class CategoryNet:
                     for h in x:
                         Wc[h] = Wc.get(h, 0.0) - lr * g
 
-# Создаем нейросети
 cat_net = CategoryNet()
 geo_net = CategoryNet(dim=2048)
 
@@ -419,7 +420,6 @@ def get_category(name):
     if any(w in n for w in ['первый канал', 'россия 1', 'нтв', 'тнт', 'стс']):
         return 'Федеральные'
     
-    # Пробуем нейросеть
     pred, p1, p2 = cat_net.predict(name)
     if pred and p1 >= NET_P_MIN and (p1 - p2) >= NET_MARGIN:
         return pred
@@ -660,7 +660,6 @@ def update_cache():
         seen = set()
         reasons = Counter()
         
-        # Загружаем статические источники
         loaded = 0
         with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as ex:
             futures = {ex.submit(fetch_source_text, url): url for url in STATIC_SOURCES}
@@ -680,7 +679,6 @@ def update_cache():
             stats['alive_channels'] = 0
             return
         
-        # Проверка каналов
         raw = list(entries.values())
         alive = []
         
@@ -694,7 +692,6 @@ def update_cache():
                 except Exception:
                     pass
         
-        # Сортировка по категориям
         def sort_key(ch):
             try:
                 idx = CAT_ORDER.index(ch['cat'])
@@ -704,7 +701,6 @@ def update_cache():
         
         alive_sorted = sorted(alive, key=sort_key)
         
-        # Формируем плейлист
         lines = [
             '#EXTM3U url-tvg="' + EPG_URLS + '"',
             '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M'),
