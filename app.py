@@ -696,6 +696,8 @@ def fetch_iptv_org_api():
         for ch in ch_r.json():
             if ch.get('is_nsfw'):
                 continue
+            if ch.get('category') == 'radio':
+                continue
             name = ch.get('name', '')
             country = ch.get('country') or ''
             if name and len(name) >= 3:
@@ -746,13 +748,39 @@ def fetch_source_text(url):
     except Exception:
         return None
 
-def _first_media_uri(text, base):
-    for l in text.splitlines():
-        s = l.strip()
-        if not s or s.startswith('#'):
+def parse_m3u(text, entries, seen_urls, reasons):
+    current_inf = ''
+    current_name = ''
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
             continue
-        return s if s.startswith('http') else base + s
-    return None
+        if line.startswith('#EXTINF:'):
+            current_inf = line
+            m = re.search(r',\s*(.+)$', line)
+            current_name = m.group(1).strip() if m else ''
+        elif line.startswith('http'):
+            if current_name:
+                reason = reject_reason(current_name, line)
+                if reason:
+                    reasons[reason] += 1
+                elif line not in seen_urls:
+                    seen_urls.add(line)
+                    cat = get_category(current_name)
+                    inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
+                    inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
+                    ch = {'inf': inf, 'url': line, 'cat': cat, 'name': current_name, 'ua': '', 'ref': ''}
+                    key = norm_name(current_name)
+                    if key in entries:
+                        if is_hd(current_name) and not is_hd(entries[key]['name']):
+                            entries[key] = ch
+                    else:
+                        entries[key] = ch
+                        if len(entries) >= MAX_CHANNELS:
+                            return True
+            current_inf = ''
+            current_name = ''
+    return False
 
 def check_one(ch, limit=None):
     lim = limit or CHECK_TIMEOUT
@@ -833,48 +861,22 @@ def check_one(ch, limit=None):
             return True
         if not head:
             return True
-        if head[:1] == b'\x47' or b'ftyp' in head[:16] or b'moov' in head[:32] \
-                or b'styp' in head[:16] or head[:7] == b'#EXTM3U':
+        if head[:1] == b'\x47' or b'ftyp' in head[:16] or b'moov' in head[:32]:
             return True
         low = head[:200].lower()
-        if b'<html' in low or b'<!doctype' in low or any(m in low for m in BLOCK_MARKERS):
+        if b'<html' in low or b'<!doctype' in low:
             return False
         return True
     return False
 
-def parse_m3u(text, entries, seen_urls, reasons):
-    current_inf = ''
-    current_name = ''
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
+def _first_media_uri(text, base):
+    for l in text.splitlines():
+        s = l.strip()
+        if not s or s.startswith('#'):
             continue
-        if line.startswith('#EXTINF:'):
-            current_inf = line
-            m = re.search(r',\s*(.+)$', line)
-            current_name = m.group(1).strip() if m else ''
-        elif line.startswith('http'):
-            if current_name:
-                reason = reject_reason(current_name, line)
-                if reason:
-                    reasons[reason] += 1
-                elif line not in seen_urls:
-                    seen_urls.add(line)
-                    cat = get_category(current_name)
-                    inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
-                    inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
-                    ch = {'inf': inf, 'url': line, 'cat': cat, 'name': current_name, 'ua': '', 'ref': ''}
-                    key = norm_name(current_name)
-                    if key in entries:
-                        if is_hd(current_name) and not is_hd(entries[key]['name']):
-                            entries[key] = ch
-                    else:
-                        entries[key] = ch
-                        if len(entries) >= MAX_CHANNELS:
-                            return True
-            current_inf = ''
-            current_name = ''
-    return False
+        return s if s.startswith('http') else base + s
+    return None
+
 def _clean(lst):
     return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -921,13 +923,17 @@ JUNK_NAMES = {'index', 'index.m3u8', 'playlist', 'playlist.m3u8', 'live', 'test'
 def is_radio(name):
     n = name.lower()
     return any(w in n for w in RADIO_WORDS) or bool(re.search(r'\bfm\b', n)) or 'радиостанция' in n
+
 def is_adult(name):
     return any(w in name.lower() for w in ADULT_WORDS)
+
 def is_ukrainian(name):
     return any(w in name.lower() for w in UA_WORDS)
+
 def is_paywall(name):
     n = name.lower()
     return any(w in n for w in PAYWALL_WORDS) or any(w.lower() in n for w in BLACKLIST_WORDS)
+
 def is_russian_like(name):
     if re.search(r'[\u0400-\u04FF]', name):
         pred, p1, p2 = geo_net.predict(name)
@@ -936,22 +942,27 @@ def is_russian_like(name):
         return True
     n = name.lower()
     return any(w in n for w in LATIN_RU_WORDS)
+
 def is_bad_url(url):
     u = url.lower()
     return any(w in u for w in BAD_URL_WORDS)
+
 def norm_name(name):
     n = name.lower().strip()
     n = re.sub(r'[\(\[].*?[\)\]]', '', n)
     n = re.sub(r'\b(hd|fhd|uhd|4k|sd|hevc|h265|h264)\b', '', n)
     return re.sub(r'\s+', ' ', n).strip(' -_|')
+
 def is_junk(name):
     n = norm_name(name)
     if n in JUNK_NAMES or len(n) < 3:
         return True
     return any(w in n for w in JUNK_WORDS)
+
 def is_hd(name):
     n = name.lower()
     return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
+
 def reject_reason(name, url=''):
     if is_junk(name):
         return 'junk'
@@ -1308,4 +1319,223 @@ def update_cache():
         logger.info(f"Фильтры вырезали: {dict(reasons)}")
         with cache_lock:
             stats['filtered'] = dict(reasons)
-        kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Об
+        kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Общие']
+        cat_net.train(train_pairs + kw_pairs)
+        moved = apply_net(list(entries.values()))
+        with cache_lock:
+            stats['nb_moved'] = moved
+        logger.info(f"🧠 Ирочка распределила из «Общих»: {moved} каналов")
+        
+        raw = list(entries.values())
+        skipped = 0
+        kept = []
+        for ch in raw:
+            rep, cnt = brain.host_stats(urlparse(ch['url']).netloc)
+            if cnt >= HOST_REP_CNT and rep < HOST_REP_MIN:
+                skipped += 1
+                continue
+            kept.append(ch)
+        raw = kept
+        with cache_lock:
+            stats['host_blacklisted'] = skipped
+        if skipped:
+            logger.info(f"🚫 Смотритель отсёк {skipped} каналов с мёртвых хостов")
+        
+        for ch in raw:
+            ch['feats'] = extract_features(ch)
+            ch['host'] = urlparse(ch['url']).netloc
+            ch['ml_score'] = brain.score(ch['feats'], ch['host'])
+        raw.sort(key=lambda c: -c['ml_score'])
+        
+        if len(raw) > MAX_CHECK_POOL:
+            logger.info(f"Кандидатов {len(raw)}, ML выбрал топ-{MAX_CHECK_POOL}")
+            raw = raw[:MAX_CHECK_POOL]
+        
+        if not raw:
+            logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
+        
+        with cache_lock:
+            stats['sources_total'] = len(sources)
+            stats['playlists_loaded'] = loaded
+            stats['api_streams'] = len(api_channels)
+            stats['parsed_channels'] = len(raw)
+        logger.info(f"Уникальных кандидатов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
+        
+        samples = []
+        since_flush = 0
+        checked = 0
+        added = 0
+        last_beat = time.time()
+        ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
+        futs = {ex.submit(check_one, ch): ch for ch in raw}
+        try:
+            for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
+                checked += 1
+                ch = futs[f]
+                try:
+                    ok = bool(f.result())
+                except Exception:
+                    ok = False
+                if ok and ch['url'] not in alive_urls:
+                    nk = norm_name(ch['name'])
+                    if nk not in alive_names:
+                        alive_names.add(nk)
+                        alive_urls.add(ch['url'])
+                        alive.append(ch)
+                        added += 1
+                        since_flush += 1
+                        if since_flush >= FLUSH_EVERY:
+                            flush_playlist(alive)
+                            since_flush = 0
+                samples.append((ch['feats'], 1 if ok else 0))
+                brain.record(ch['host'], ok)
+                if time.time() - last_beat > HEARTBEAT_SEC:
+                    logger.info(f"Прогресс: {checked}/{len(raw)}, всего в плейлисте: {len(alive)} (+{added} новых)")
+                    last_beat = time.time()
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы проверки ({CHECK_PHASE_MAX}с)")
+        except Exception as e:
+            logger.error(f"Ошибка фазы проверки: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
+        
+        apply_net(alive)
+        brain.train(samples)
+        with cache_lock:
+            stats['ml_samples'] = brain.trained_samples
+            stats['ml_accuracy'] = round(brain.last_accuracy, 3)
+        
+        elapsed = time.time() - start
+        flush_playlist(alive, elapsed=elapsed)
+        logger.info(f"✅ Готово: в плейлисте {len(alive)} (добавлено {added}) за {elapsed:.0f} сек")
+    except Exception as e:
+        logger.exception(f"КРИТИЧЕСКАЯ ошибка обновления: {e}")
+    finally:
+        is_updating = False
+
+def background_worker():
+    global is_updating
+    while True:
+        try:
+            update_cache()
+        except Exception as e:
+            logger.exception(f"Фоновая ошибка: {e}")
+            is_updating = False
+        with cache_lock:
+            alive_n = stats['alive_channels']
+        wait = UPDATE_EVERY if alive_n > 0 else RETRY_IF_EMPTY
+        logger.info(f"Следующая попытка через {wait // 60} мин")
+        time.sleep(wait)
+
+HOME_TEMPLATE = """<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPTV Russia Pro MAX v3.3</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+h1{margin:0 0 8px;font-size:32px}
+.sub{opacity:.7;margin-bottom:24px}
+.btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
+.btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
+.stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
+.stat b{display:block;font-size:24px}
+.stat span{opacity:.7;font-size:12px}
+.chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
+</style></head><body><div class="card">
+<h1>🇷 IPTV Russia Pro MAX 🧠 v3.3</h1>
+<div class="sub">Комитет из 3 нейросетей: 🧠 Ирочка (категории) • 🌍 Дипломат (своё/чужое) • 🛡 Смотритель (качество)</div>
+<a class="btn" href="/playlist.m3u">📥 Плейлист (основной)</a>
+<a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
+<a class="btn blue" href="/refresh">🔄 Обновить</a>
+<a class="btn gray" href="/status">📊 JSON</a>
+<div class="stats">
+<div class="stat"><b>__ALIVE__</b><span>живых каналов</span></div>
+<div class="stat"><b>__PARSED__</b><span>проверено</span></div>
+<div class="stat"><b>__MLS__</b><span>ML примеров</span></div>
+<div class="stat"><b>__MLA__</b><span>ML точность</span></div>
+</div>
+<div class="sub">Обновлено: __UPDATED__</div>
+<div>__CATS__</div>
+</div></body></html>"""
+
+def make_home_page():
+    with cache_lock:
+        s = dict(stats)
+    cats = s.get('categories', {})
+    cat_html = ''
+    for k, v in sorted(cats.items(), key=lambda kv: -kv[1]):
+        cat_html += '<span class="chip">' + k + ': ' + str(v) + '</span>'
+    page = HOME_TEMPLATE
+    page = page.replace('__ALIVE__', str(s.get('alive_channels', 0)))
+    page = page.replace('__PARSED__', str(s.get('parsed_channels', 0)))
+    page = page.replace('__MLS__', str(s.get('ml_samples', 0)))
+    page = page.replace('__MLA__', str(s.get('ml_accuracy', 0)))
+    page = page.replace('__UPDATED__', str(s.get('last_update') or 'ещё идёт первая проверка...'))
+    page = page.replace('__CATS__', cat_html)
+    return page
+
+@app.route('/')
+def home():
+    return make_home_page()
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'})
+
+@app.route('/memory')
+def memory():
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS'):
+                    return jsonify({'rss_kb': int(line.split()[1])})
+    except Exception:
+        pass
+    return jsonify({'rss_kb': -1})
+
+@app.route('/playlist.m3u')
+@app.route('/playlist.m3u8')
+@app.route('/playlist')
+@app.route('/tv.m3u')
+@app.route('/iptv.m3u')
+def playlist():
+    return make_playlist_response()
+
+@app.route('/status')
+def status():
+    with cache_lock:
+        data = dict(stats)
+    data['is_updating'] = is_updating
+    return jsonify(data)
+
+@app.route('/refresh')
+def refresh():
+    if is_updating:
+        return jsonify({'status': 'already_updating'})
+    threading.Thread(target=update_cache, daemon=True).start()
+    return jsonify({'status': 'refresh_started'})
+
+@app.route('/<path:any_path>')
+def fallback(any_path):
+    p = any_path.lower()
+    if p.endswith(('.m3u', '.m3u8')) or 'playlist' in p or 'm3u' in p:
+        return make_playlist_response()
+    return make_home_page()
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Запуск IPTV Russia Pro MAX v{VERSION} на порту {port}")
+    load_disk_cache()
+    threading.Thread(target=background_worker, daemon=True).start()
+    threading.Thread(target=keepalive_worker, daemon=True).start()
+    threading.Thread(target=sweep_worker, daemon=True).start()
+    try:
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=port, threads=8)
+    except ImportError:
+        app.run(host='0.0.0.0', port=port, threaded=True)
