@@ -3,11 +3,12 @@ import re
 import time
 import math
 import zlib
+import json
+import queue
 import random
 import logging
 import threading
 import sqlite3
-import pickle
 import requests
 import urllib3
 from urllib.parse import urlparse, unquote, quote
@@ -20,7 +21,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-VERSION = '3.1'
+VERSION = '3.3'
 
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
@@ -122,6 +123,18 @@ HTML_SOURCES = [
     "https://new.m3u.su/",
 ]
 
+# 📂 Внешний конфиг источников (необязательно): sources.json рядом с app.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SOURCES_FILE = os.path.join(BASE_DIR, 'sources.json')
+try:
+    with open(SOURCES_FILE, encoding='utf-8') as f:
+        _ext = json.load(f)
+    STATIC_SOURCES = list(dict.fromkeys(STATIC_SOURCES + _ext.get('static', [])))
+    HTML_SOURCES = list(dict.fromkeys(HTML_SOURCES + _ext.get('html', [])))
+    logging.getLogger(__name__).info(f"📂 sources.json: +{len(_ext.get('static', []))} static, +{len(_ext.get('html', []))} html")
+except Exception:
+    pass
+
 FALLBACK_REGIONS = [
     "ru-kgd", "ru-mow", "ru-mos", "ru-spe", "ru-len", "ru-kda", "ru-ros", "ru-vgg",
     "ru-sta", "ru-da", "ru-sam", "ru-ud", "ru-ta", "ru-ba", "ru-udm", "ru-per",
@@ -171,16 +184,23 @@ GEO_MARGIN = 0.2
 HOST_REP_MIN = 0.15
 HOST_REP_CNT = 10
 
+# ⚙️ Веса скоринга (тюнинг в одном месте)
+W_MODEL, W_REP, W_HEUR = 0.5, 0.35, 0.15
+W_REP_COLD, W_HEUR_COLD, W_CNT_COLD = 0.55, 0.25, 0.2
+H_HTTPS, H_M3U8, H_NOTOKEN = 0.5, 0.3, 0.2
+
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
-             'Музыка', 'Познавательные', 'Развлекательные', 'Региональные', 'Общие']
+             'Музыка', 'Познавательные', 'Развлекательные', 'Региональные',
+             'Радио', 'Общие']
 
 EPG_URLS = ("https://iptv-org.github.io/epg/guides/ru.xml.gz,"
             "https://iptv-org.github.io/epg/guides/by.xml.gz,"
             "https://iptv-org.github.io/epg/guides/kz.xml.gz")
 
 API_CAT_MAP = [
+    (['radio'], 'Радио'),
     (['kids', 'animation'], 'Детские'),
     (['news', 'business'], 'Новости'),
     (['sports'], 'Спорт'),
@@ -211,8 +231,7 @@ stats = {
     "playlists_loaded": 0, "api_streams": 0, "parsed_channels": 0,
     "alive_channels": 0, "filtered": {}, "categories": {},
     "ml_samples": 0, "ml_accuracy": 0.0, "ml_on": True, "nb_moved": 0,
-    "last_sweep": None, "sweep_removed": 0, "host_blacklisted": 0,
-    "geo_pairs": 0, "geo_rejected": 0,
+    "last_sweep": None, "sweep_removed": 0, "host_blacklisted": 0, "geo_pairs": 0,
 }
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -248,12 +267,50 @@ BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'ограничен', 'недоступен', 'роскомнадзор',
                  'не показывает', 'на этой территории', 'territory']
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
 DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
-MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.pkl')
+MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.json')
 
 SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
+
+# ==================== 💾 SQLite: один коннект + очередь записи ====================
+db_conn = None
+db_lock = threading.Lock()
+DB_Q = queue.Queue()
+try:
+    db_conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    with db_lock:
+        db_conn.execute('CREATE TABLE IF NOT EXISTS checks '
+                        '(id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, alive INTEGER, ts REAL)')
+        db_conn.commit()
+except Exception as e:
+    logger.error(f"💾 SQLite недоступна: {e}")
+    db_conn = None
+
+def db_writer_worker():
+    """Единственный поток-писатель: батчи INSERT, без database-is-locked"""
+    commits = 0
+    while True:
+        batch = []
+        try:
+            batch.append(DB_Q.get(timeout=5))
+            while True:
+                batch.append(DB_Q.get_nowait())
+        except queue.Empty:
+            pass
+        if not batch or db_conn is None:
+            continue
+        try:
+            with db_lock:
+                db_conn.executemany('INSERT INTO checks (host, alive, ts) VALUES (?,?,?)', batch)
+                db_conn.commit()
+                commits += 1
+                if commits % 20 == 0:
+                    db_conn.execute('DELETE FROM checks WHERE id NOT IN '
+                                    '(SELECT id FROM checks ORDER BY ts DESC LIMIT 20000)')
+                    db_conn.commit()
+        except Exception as e:
+            logger.error(f"💾 DB writer: {e}")
 
 def proxy_url(u, ua=None, ref=None):
     q = SELF_URL + '/proxy?url=' + quote(u, safe='')
@@ -269,7 +326,7 @@ def _sig(z):
     ez = math.exp(z)
     return ez / (1.0 + ez)
 
-# ==================== 🛡 СМОТРИТЕЛЬ: долгоживучесть потоков ====================
+# ==================== 🛡 Смотритель (веса в JSON, без pickle) ====================
 class TinyLR:
     def __init__(self, n=12):
         self.w = [0.0] * n
@@ -284,8 +341,24 @@ class TinyLR:
                 for i, xi in enumerate(x):
                     self.w[i] = self.w[i] * (1.0 - l2) - lr * e * xi
                 self.b -= lr * e
+    def save(self, path):
+        try:
+            with open(path, 'w') as f:
+                json.dump({'w': self.w, 'b': self.b}, f)
+        except Exception:
+            pass
+    @staticmethod
+    def load(path):
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            m = TinyLR(len(d['w']))
+            m.w = d['w']
+            m.b = d['b']
+            return m
+        except Exception:
+            return None
 
-# ==================== БАЗОВАЯ СЕТЬ (софтмакс, хэш-признаки) ====================
 class CategoryNet:
     def __init__(self, dim=4096):
         self.dim = dim
@@ -349,9 +422,7 @@ class CategoryNet:
                     for h in x:
                         Wc[h] = Wc.get(h, 0.0) - lr * g
 
-# 🧠 Ирочка — категории
 cat_net = CategoryNet()
-# 🌍 Дипломат — своё/чужое (СНГ vs остальные)
 geo_net = CategoryNet(dim=2048)
 
 def apply_net(ch_list):
@@ -368,32 +439,22 @@ def apply_net(ch_list):
 class MLBrain:
     def __init__(self):
         self.host_alive, self.host_total = {}, {}
-        self.model = None
+        self.model = TinyLR.load(MODEL_FILE)
         self.trained_samples = 0
         self.last_accuracy = 0.0
-        self.db = None
         self.lock = threading.RLock()
-        try:
-            self.db = sqlite3.connect(DB_FILE, check_same_thread=False)
-            with self.lock:
-                self.db.execute('CREATE TABLE IF NOT EXISTS checks '
-                                '(id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, alive INTEGER, ts REAL)')
-                self.db.commit()
-                rows = self.db.execute('SELECT host, SUM(alive), COUNT(*) FROM checks GROUP BY host').fetchall()
-            for host, s, c in rows:
-                self.host_alive[host] = int(s)
-                self.host_total[host] = int(c)
-            logger.info(f"🧠 ML: история из БД: {len(rows)} хостов")
-        except Exception as e:
-            logger.error(f"🧠 ML: БД недоступна: {e}")
-            self.db = None
-        try:
-            if os.path.exists(MODEL_FILE):
-                with open(MODEL_FILE, 'rb') as f:
-                    self.model = pickle.load(f)
-                logger.info("🧠 ML: нейрон загружен с диска")
-        except Exception:
-            self.model = None
+        if db_conn is not None:
+            try:
+                with db_lock:
+                    rows = db_conn.execute('SELECT host, SUM(alive), COUNT(*) FROM checks GROUP BY host').fetchall()
+                for host, s, c in rows:
+                    self.host_alive[host] = int(s)
+                    self.host_total[host] = int(c)
+                logger.info(f"🧠 ML: история из БД: {len(rows)} хостов")
+            except Exception as e:
+                logger.error(f"🧠 ML: БД недоступна: {e}")
+        if self.model:
+            logger.info("🧠 ML: нейрон загружен (JSON)")
     def host_stats(self, host):
         with self.lock:
             t = self.host_total.get(host, 0)
@@ -405,15 +466,7 @@ class MLBrain:
         with self.lock:
             self.host_total[host] = self.host_total.get(host, 0) + 1
             self.host_alive[host] = self.host_alive.get(host, 0) + (1 if alive else 0)
-        if self.db is None:
-            return
-        try:
-            with self.lock:
-                self.db.execute('INSERT INTO checks (host, alive, ts) VALUES (?,?,?)',
-                                (host, 1 if alive else 0, time.time()))
-                self.db.commit()
-        except Exception:
-            pass
+        DB_Q.put((host, 1 if alive else 0, time.time()))
     def model_prob(self, feats):
         if self.model is None:
             return None
@@ -423,11 +476,11 @@ class MLBrain:
             return None
     def score(self, feats, host):
         rep, cnt = self.host_stats(host)
-        heur = 0.5 * feats[2] + 0.3 * feats[3] + 0.2 * (1.0 - feats[5])
+        heur = H_HTTPS * feats[2] + H_M3U8 * feats[3] + H_NOTOKEN * (1.0 - feats[5])
         p = self.model_prob(feats)
         if p is None:
-            return 0.55 * rep + 0.25 * heur + 0.2 * min(cnt / 10.0, 1.0)
-        return 0.5 * p + 0.35 * rep + 0.15 * heur
+            return W_REP_COLD * rep + W_HEUR_COLD * heur + W_CNT_COLD * min(cnt / 10.0, 1.0)
+        return W_MODEL * p + W_REP * rep + W_HEUR * heur
     def train(self, samples):
         if not samples or len(samples) < 20:
             return
@@ -449,20 +502,11 @@ class MLBrain:
             self.trained_samples += len(samples)
             if acc is not None:
                 self.last_accuracy = acc
-            with open(MODEL_FILE, 'wb') as f:
-                pickle.dump(self.model, f)
+            self.model.save(MODEL_FILE)
             logger.info(f"🧠 ML: дообучено на {len(samples)} примерах "
                         f"(всего {self.trained_samples}), acc до: {acc if acc is not None else 'н/д'}")
         except Exception as e:
             logger.error(f"🧠 ML: ошибка обучения: {e}")
-        if self.db is not None:
-            try:
-                with self.lock:
-                    self.db.execute('DELETE FROM checks WHERE id NOT IN '
-                                    '(SELECT id FROM checks ORDER BY ts DESC LIMIT 20000)')
-                    self.db.commit()
-            except Exception:
-                pass
 
 brain = MLBrain()
 
@@ -581,7 +625,8 @@ RADIO_WORDS = _clean([
     'радио', 'radio', 'fm', 'ржд', 'дорожное', 'авторадио', 'ретро fm',
     'europa plus', 'европа плюс', 'шансон', 'dfm', 'monte carlo', 'maximum',
     'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
-    'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm'])
+    'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm',
+    'маяк', 'вести fm', 'радио дача', 'радио 7', 'радио энерджи', 'хит fm'])
 LATIN_RU_WORDS = _clean([
     'rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pervy', 'channel one',
     'match tv', 'match!', 'zvezda', 'karusel', 'carousel', 'muz-tv', 'muz tv',
@@ -797,7 +842,6 @@ def fetch_telegram():
     return list(found)
 
 def fetch_iptv_org_api():
-    """Возвращает (потоки РФ/СНГ, пары для Ирочки, пары для Дипломата)"""
     try:
         sess = get_session()
         ch_r = sess.get("https://iptv-org.github.io/api/channels.json", timeout=(10, 60), headers=HEADERS_WEB)
@@ -810,8 +854,6 @@ def fetch_iptv_org_api():
         geo_pairs = []
         for ch in ch_r.json():
             if ch.get('is_nsfw'):
-                continue
-            if ch.get('category') == 'radio':
                 continue
             name = ch.get('name', '')
             country = ch.get('country') or ''
@@ -863,28 +905,6 @@ def fetch_source_text(url):
     except Exception:
         return None
 
-def get_category(name):
-    n = name.lower()
-    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'богатыр', 'алёша', 'трёшка']):
-        return 'Детские'
-    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
-        return 'Новости'
-    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
-        return 'Спорт'
-    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
-        return 'Кино и сериалы'
-    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз', 'клип']):
-        return 'Музыка'
-    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health', 'медицин']):
-        return 'Познавательные'
-    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот']):
-        return 'Развлекательные'
-    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'городской']):
-        return 'Региональные'
-    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
-        return 'Федеральные'
-    return 'Общие'
-
 def is_adult(name):
     return any(w in name.lower() for w in ADULT_WORDS)
 def is_ukrainian(name):
@@ -896,7 +916,6 @@ def is_radio(name):
     n = name.lower()
     return any(w in n for w in RADIO_WORDS) or bool(re.search(r'\bfm\b', n)) or 'радиостанция' in n
 def is_russian_like(name):
-    # 🌍 Дипломат: кириллица — ещё не гарантия; уверенных иностранцев отсеваем
     if re.search(r'[\u0400-\u04FF]', name):
         pred, p1, p2 = geo_net.predict(name)
         if pred == 'OTHER' and p1 >= GEO_P_MIN and (p1 - p2) >= GEO_MARGIN:
@@ -931,11 +950,33 @@ def reject_reason(name, url=''):
         return 'ua'
     if is_paywall(name):
         return 'paywall'
-    if is_radio(name):
-        return 'radio'
     if url and is_bad_url(url):
         return 'geo'
     return None
+
+def get_category(name):
+    if is_radio(name):
+        return 'Радио'
+    n = name.lower()
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'богатыр', 'алёша', 'трёшка', 'мультимани']):
+        return 'Детские'
+    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
+        return 'Новости'
+    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
+        return 'Спорт'
+    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
+        return 'Кино и сериалы'
+    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз', 'клип']):
+        return 'Музыка'
+    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health', 'медицин']):
+        return 'Познавательные'
+    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот']):
+        return 'Развлекательные'
+    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'городской']):
+        return 'Региональные'
+    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
+        return 'Федеральные'
+    return 'Общие'
 
 def _first_media_uri(text, base):
     for l in text.splitlines():
@@ -1095,7 +1136,7 @@ def flush_playlist(alive, elapsed=None, replace=False):
     lines = [
         '#EXTM3U url-tvg="' + EPG_URLS + '"',
         '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M'),
-        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | без радио | без подписок | без гео-заглушек',
+        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | радио отдельно',
     ]
     for ch in alive_sorted:
         lines.append(ch['inf'])
@@ -1300,12 +1341,10 @@ def update_cache():
     logger.info("🔄 v" + VERSION + " Старт: комитет нейросетей + разведка...")
     try:
         api_channels, train_pairs, geo_pairs = fetch_iptv_org_api()
-        # 🌍 Дипломат учится первым — до фильтрации
         geo_net.train(geo_pairs, epochs=3, lr=0.1)
         with cache_lock:
             stats['geo_pairs'] = len(geo_pairs)
         logger.info(f"🌍 Дипломат обучен на {len(geo_pairs)} примерах")
-
         with cache_lock:
             alive = list(alive_list)
         alive_urls = set(ch['url'] for ch in alive)
@@ -1382,220 +1421,4 @@ def update_cache():
             except TypeError:
                 ex.shutdown(wait=False)
         logger.info(f"Загружено и распарсено плейлистов: {loaded}")
-        logger.info(f"Фильтры вырезали: {dict(reasons)}")
-        with cache_lock:
-            stats['filtered'] = dict(reasons)
-        # 🧠 Ирочка учится и наводит порядок
-        kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values()
-                    if ch['cat'] != 'Общие']
-        cat_net.train(train_pairs + kw_pairs)
-        moved = apply_net(list(entries.values()))
-        with cache_lock:
-            stats['nb_moved'] = moved
-        logger.info(f"🧠 Ирочка распределила из «Общих»: {moved} каналов")
-        raw = list(entries.values())
-        skipped = 0
-        kept = []
-        for ch in raw:
-            rep, cnt = brain.host_stats(urlparse(ch['url']).netloc)
-            if cnt >= HOST_REP_CNT and rep < HOST_REP_MIN:
-                skipped += 1
-                continue
-            kept.append(ch)
-        raw = kept
-        with cache_lock:
-            stats['host_blacklisted'] = skipped
-        if skipped:
-            logger.info(f"🚫 Смотритель отсёк {skipped} каналов с мёртвых хостов")
-        for ch in raw:
-            ch['feats'] = extract_features(ch)
-            ch['host'] = urlparse(ch['url']).netloc
-            ch['ml_score'] = brain.score(ch['feats'], ch['host'])
-        raw.sort(key=lambda c: -c['ml_score'])
-        if len(raw) > MAX_CHECK_POOL:
-            logger.info(f"Кандидатов {len(raw)}, ML выбрал топ-{MAX_CHECK_POOL}")
-            raw = raw[:MAX_CHECK_POOL]
-        if not raw:
-            logger.error("⚠️ ВСЕ каналы отфильтрованы! Проверь списки слов!")
-        with cache_lock:
-            stats['sources_total'] = len(sources)
-            stats['playlists_loaded'] = loaded
-            stats['api_streams'] = len(api_channels)
-            stats['parsed_channels'] = len(raw)
-        logger.info(f"Уникальных кандидатов: {len(raw)}. Проверка (<= 40 сек, {CHECK_WORKERS} потоков)...")
-        samples = []
-        since_flush = 0
-        checked = 0
-        added = 0
-        last_beat = time.time()
-        ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
-        futs = {ex.submit(check_one, ch): ch for ch in raw}
-        try:
-            for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
-                checked += 1
-                ch = futs[f]
-                try:
-                    ok = bool(f.result())
-                except Exception:
-                    ok = False
-                if ok and ch['url'] not in alive_urls:
-                    nk = norm_name(ch['name'])
-                    if nk not in alive_names:
-                        alive_names.add(nk)
-                        alive_urls.add(ch['url'])
-                        alive.append(ch)
-                        added += 1
-                        since_flush += 1
-                        if since_flush >= FLUSH_EVERY:
-                            flush_playlist(alive)
-                            since_flush = 0
-                samples.append((ch['feats'], 1 if ok else 0))
-                brain.record(ch['host'], ok)
-                if time.time() - last_beat > HEARTBEAT_SEC:
-                    logger.info(f"Прогресс: {checked}/{len(raw)}, всего в плейлисте: {len(alive)} (+{added} новых)")
-                    last_beat = time.time()
-        except TimeoutError:
-            logger.warning(f"⏳ Таймаут фазы проверки ({CHECK_PHASE_MAX}с)")
-        except Exception as e:
-            logger.error(f"Ошибка фазы проверки: {e}")
-        finally:
-            try:
-                ex.shutdown(wait=False, cancel_futures=True)
-            except TypeError:
-                ex.shutdown(wait=False)
-        apply_net(alive)
-        brain.train(samples)
-        with cache_lock:
-            stats['ml_samples'] = brain.trained_samples
-            stats['ml_accuracy'] = round(brain.last_accuracy, 3)
-        elapsed = time.time() - start
-        flush_playlist(alive, elapsed=elapsed)
-        logger.info(f"✅ Готово: в плейлисте {len(alive)} (добавлено {added}) за {elapsed:.0f} сек")
-    except Exception as e:
-        logger.exception(f"КРИТИЧЕСКАЯ ошибка обновления: {e}")
-    finally:
-        is_updating = False
-
-def background_worker():
-    global is_updating
-    while True:
-        try:
-            update_cache()
-        except Exception as e:
-            logger.exception(f"Фоновая ошибка: {e}")
-            is_updating = False
-        with cache_lock:
-            alive_n = stats['alive_channels']
-        wait = UPDATE_EVERY if alive_n > 0 else RETRY_IF_EMPTY
-        logger.info(f"Следующая попытка через {wait // 60} мин")
-        time.sleep(wait)
-
-HOME_TEMPLATE = """<!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v3.1</title>
-<style>
-body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
-h1{margin:0 0 8px;font-size:32px}
-.sub{opacity:.7;margin-bottom:24px}
-.btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
-.btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
-.stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
-.stat b{display:block;font-size:24px}
-.stat span{opacity:.7;font-size:12px}
-.chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
-</style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v3.1</h1>
-<div class="sub">Комитет из 3 нейросетей: 🧠 Ирочка (категории) •  Дипломат (своё/чужое) • 🛡 Смотритель (качество)</div>
-<a class="btn" href="/playlist.m3u">📥 Плейлист (основной)</a>
-<a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
-<a class="btn blue" href="/refresh">🔄 Обновить</a>
-<a class="btn gray" href="/status">📊 JSON</a>
-<div class="stats">
-<div class="stat"><b>__ALIVE__</b><span>живых каналов</span></div>
-<div class="stat"><b>__PARSED__</b><span>проверено</span></div>
-<div class="stat"><b>__MLS__</b><span>ML примеров</span></div>
-<div class="stat"><b>__MLA__</b><span>ML точность</span></div>
-</div>
-<div class="sub">Обновлено: __UPDATED__</div>
-<div>__CATS__</div>
-</div></body></html>"""
-
-def make_home_page():
-    with cache_lock:
-        s = dict(stats)
-    cats = s.get('categories', {})
-    cat_html = ''
-    for k, v in sorted(cats.items(), key=lambda kv: -kv[1]):
-        cat_html += '<span class="chip">' + k + ': ' + str(v) + '</span>'
-    page = HOME_TEMPLATE
-    page = page.replace('__ALIVE__', str(s.get('alive_channels', 0)))
-    page = page.replace('__PARSED__', str(s.get('parsed_channels', 0)))
-    page = page.replace('__MLS__', str(s.get('ml_samples', 0)))
-    page = page.replace('__MLA__', str(s.get('ml_accuracy', 0)))
-    page = page.replace('__UPDATED__', str(s.get('last_update') or 'ещё идёт первая проверка...'))
-    page = page.replace('__CATS__', cat_html)
-    return page
-
-@app.route('/')
-def home():
-    return make_home_page()
-
-@app.route('/health')
-def health():
-    return jsonify({'status': 'ok'})
-
-@app.route('/memory')
-def memory():
-    try:
-        with open('/proc/self/status') as f:
-            for line in f:
-                if line.startswith('VmRSS'):
-                    return jsonify({'rss_kb': int(line.split()[1])})
-    except Exception:
-        pass
-    return jsonify({'rss_kb': -1})
-
-@app.route('/playlist.m3u')
-@app.route('/playlist.m3u8')
-@app.route('/playlist')
-@app.route('/tv.m3u')
-@app.route('/iptv.m3u')
-def playlist():
-    return make_playlist_response()
-
-@app.route('/status')
-def status():
-    with cache_lock:
-        data = dict(stats)
-    data['is_updating'] = is_updating
-    return jsonify(data)
-
-@app.route('/refresh')
-def refresh():
-    if is_updating:
-        return jsonify({'status': 'already_updating'})
-    threading.Thread(target=update_cache, daemon=True).start()
-    return jsonify({'status': 'refresh_started'})
-
-@app.route('/<path:any_path>')
-def fallback(any_path):
-    p = any_path.lower()
-    if p.endswith(('.m3u', '.m3u8')) or 'playlist' in p or 'm3u' in p:
-        return make_playlist_response()
-    return make_home_page()
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Запуск на порту {port}")
-    load_disk_cache()
-    threading.Thread(target=background_worker, daemon=True).start()
-    threading.Thread(target=keepalive_worker, daemon=True).start()
-    threading.Thread(target=sweep_worker, daemon=True).start()
-    try:
-        from waitress import serve
-        serve(app, host='0.0.0.0', port=port, threads=8)
-    except ImportError:
-        app.run(host='0.0.0.0', port=port, threaded=True)
+        logger.info(f"Фильтры вырез
