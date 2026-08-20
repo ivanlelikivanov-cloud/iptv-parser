@@ -875,3 +875,437 @@ def parse_m3u(text, entries, seen_urls, reasons):
             current_inf = ''
             current_name = ''
     return False
+def _clean(lst):
+    return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
+
+ADULT_WORDS = _clean(['xxx', 'adult', 'porn', 'sex', 'hentai', '18+',
+                      'эротика', 'порно', 'nude', 'playboy'])
+UA_WORDS = _clean(['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ',
+                   'львів', 'львов', 'харків', 'дніпро', 'одеса', 'суспільне',
+                   'суспильне', 'прямий', 'тсн', '1+1', '2+2', 'інтер',
+                   'inter ua', 'верес', 'тоніс', 'тонис', 'ua: ', 'ua |',
+                   '| ua', ' ukraine', 'украинск', '5 kanal',
+                   'надія', 'новий', 'перший', 'ранок', 'мова', 'тб',
+                   'нація', 'світ тв', 'люд', 'країна'])
+PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment', 'купить',
+                        'продаж', 'whatsapp', 'telegram', 't.me', 'promo',
+                        'реклам', 'advert', 'магазин', 'shop', 'store',
+                        'premium', 'премиум', 'vip', 'вип', 'ppv',
+                        'pay per view', 'активация', 'iptv', 'fifa', 'wink',
+                        'world cup', 'чемпионат мира', 'плей-офф', 'тариф',
+                        'абонент'])
+BLACKLIST_WORDS = _clean(['fifa', 'world cup', 'чемпионат мира', 'плей-офф'])
+RADIO_WORDS = _clean([
+    'радио', 'radio', 'fm', 'ржд', 'дорожное', 'авторадио', 'ретро fm',
+    'europa plus', 'европа плюс', 'шансон', 'dfm', 'monte carlo', 'maximum',
+    'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
+    'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm',
+    'маяк', 'вести fm', 'радио дача', 'хит fm', 'love radio', 'радио мир'])
+LATIN_RU_WORDS = _clean([
+    'rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pervy', 'channel one',
+    'match tv', 'match!', 'zvezda', 'karusel', 'carousel', 'muz-tv', 'muz tv',
+    'ru.tv', 'rutv', 'tv1000', 'tv 1000', 'ren tv', 'ntv', 'sts', 'tnt',
+    'rossiya', 'rossia', 'russia', 'vesti', 'izvestia', 'kultura', 'soyuz',
+    'spas', 'domashniy', 'pyatnitsa', 'subbota', 'mir tv', 'otr', 'tv centr',
+    'tv center', 'telekanal', '360', '8 kanal', 'shanson tv', 'retro tv',
+    'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
+    'kinopoisk', 'illuzion'])
+BAD_URL_WORDS = _clean(['wink.ru', 'wink.', 'okko.tv', 'ivi.ru', 'more.tv',
+                        'kion.ru', 'start.ru', 'premier.one', 'geoblock', 'geo-block'])
+JUNK_WORDS = _clean(['webcam', 'камера', 'camera', 'без названия', 'безымянный',
+                     'test channel', 'проверка'])
+JUNK_NAMES = {'index', 'index.m3u8', 'playlist', 'playlist.m3u8', 'live', 'test',
+              'stream', 'video', 'm3u', 'channel', 'tv', '1', 'hd', 'fhd', '4k',
+              'main', 'default', 'unknown', 'без названия', 'безымянный'}
+
+def is_radio(name):
+    n = name.lower()
+    return any(w in n for w in RADIO_WORDS) or bool(re.search(r'\bfm\b', n)) or 'радиостанция' in n
+def is_adult(name):
+    return any(w in name.lower() for w in ADULT_WORDS)
+def is_ukrainian(name):
+    return any(w in name.lower() for w in UA_WORDS)
+def is_paywall(name):
+    n = name.lower()
+    return any(w in n for w in PAYWALL_WORDS) or any(w.lower() in n for w in BLACKLIST_WORDS)
+def is_russian_like(name):
+    if re.search(r'[\u0400-\u04FF]', name):
+        pred, p1, p2 = geo_net.predict(name)
+        if pred == 'OTHER' and p1 >= GEO_P_MIN and (p1 - p2) >= GEO_MARGIN:
+            return False
+        return True
+    n = name.lower()
+    return any(w in n for w in LATIN_RU_WORDS)
+def is_bad_url(url):
+    u = url.lower()
+    return any(w in u for w in BAD_URL_WORDS)
+def norm_name(name):
+    n = name.lower().strip()
+    n = re.sub(r'[\(\[].*?[\)\]]', '', n)
+    n = re.sub(r'\b(hd|fhd|uhd|4k|sd|hevc|h265|h264)\b', '', n)
+    return re.sub(r'\s+', ' ', n).strip(' -_|')
+def is_junk(name):
+    n = norm_name(name)
+    if n in JUNK_NAMES or len(n) < 3:
+        return True
+    return any(w in n for w in JUNK_WORDS)
+def is_hd(name):
+    n = name.lower()
+    return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
+def reject_reason(name, url=''):
+    if is_junk(name):
+        return 'junk'
+    if not is_russian_like(name):
+        return 'not_ru'
+    if is_adult(name):
+        return 'adult'
+    if is_ukrainian(name):
+        return 'ua'
+    if is_paywall(name):
+        return 'paywall'
+    if url and is_bad_url(url):
+        return 'geo'
+    return None
+
+def get_category(name):
+    if is_radio(name):
+        return 'Радио'
+    n = name.lower()
+    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'богатыр', 'алёша', 'трёшка', 'мультимани', 'тоша']):
+        return 'Детские'
+    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
+        return 'Новости'
+    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
+        return 'Спорт'
+    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
+        return 'Кино и сериалы'
+    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз', 'клип']):
+        return 'Музыка'
+    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health', 'медицин']):
+        return 'Познавательные'
+    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот']):
+        return 'Развлекательные'
+    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'городской']):
+        return 'Региональные'
+    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
+        return 'Федеральные'
+    return 'Общие'
+
+def flush_playlist(alive, elapsed=None, replace=False):
+    global playlist_cache, alive_list
+    with cache_lock:
+        current = list(alive_list)
+    if elapsed is None and not replace and current:
+        have = set(c['url'] for c in current)
+        have_names = set(norm_name(c['name']) for c in current)
+        merged = current
+        for ch in alive:
+            nk = norm_name(ch['name'])
+            if ch['url'] not in have and nk not in have_names:
+                have.add(ch['url'])
+                have_names.add(nk)
+                merged.append(ch)
+        alive = merged
+    def sort_key(ch):
+        try:
+            i = CAT_ORDER.index(ch['cat'])
+        except ValueError:
+            i = len(CAT_ORDER)
+        return (i, ch['name'].lower())
+    alive_sorted = sorted(alive, key=sort_key)
+    if not alive_sorted:
+        return
+    cat_counts = Counter(ch['cat'] for ch in alive_sorted)
+    lines = [
+        '#EXTM3U url-tvg="' + EPG_URLS + '"',
+        '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M'),
+        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | радио — отдельный раздел',
+    ]
+    for ch in alive_sorted:
+        lines.append(ch['inf'])
+        lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
+        if ch.get('ref'):
+            lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
+        lines.append(ch['url'])
+    data = '\n'.join(lines)
+    with cache_lock:
+        playlist_cache = data
+        alive_list = alive_sorted
+        stats['alive_channels'] = len(alive_sorted)
+        stats['categories'] = dict(cat_counts)
+        if elapsed is not None:
+            stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            stats['duration_sec'] = round(elapsed, 1)
+    save_disk_cache(data)
+
+def build_playlist(chans, proxied):
+    lines = [
+        '#EXTM3U url-tvg="' + EPG_URLS + '"',
+        '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M') +
+        (' | PROXY' if proxied else ' | DIRECT'),
+    ]
+    for ch in chans:
+        lines.append(ch['inf'])
+        if proxied:
+            ua = ch.get('ua') or 'VLC/3.0.20 LibVLC/3.0.20'
+            lines.append(proxy_url(ch['url'], ua, ch.get('ref')))
+        else:
+            lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
+            if ch.get('ref'):
+                lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
+            lines.append(ch['url'])
+    return '\n'.join(lines)
+
+@app.route('/proxy')
+def proxy():
+    url = request.args.get('url')
+    if not url:
+        return ('', 400)
+    ua = request.args.get('ua') or HEADERS_PLAYER['User-Agent']
+    ref = request.args.get('ref')
+    hdr = {'User-Agent': ua}
+    if ref:
+        hdr['Referer'] = ref
+    try:
+        r = requests.get(url, headers=hdr, stream=True, timeout=(10, 30),
+                         verify=False, allow_redirects=True)
+    except Exception:
+        return ('', 502)
+    if r.status_code >= 400:
+        r.close()
+        return ('', 502)
+    ct = (r.headers.get('Content-Type') or 'application/octet-stream').lower()
+    if 'mpegurl' in ct or url.lower().endswith(('.m3u8', '.m3u')):
+        text = r.text
+        r.close()
+        base = url.rsplit('/', 1)[0] + '/'
+        out = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith('#'):
+                if 'URI="' in s:
+                    m = re.search(r'URI="([^"]+)"', s)
+                    if m:
+                        u2 = m.group(1)
+                        abs_u = u2 if u2.startswith('http') else base + u2
+                        s = s.replace(m.group(0), 'URI="' + proxy_url(abs_u, ua, ref) + '"')
+                out.append(s)
+            else:
+                abs_u = s if s.startswith('http') else base + s
+                out.append(proxy_url(abs_u, ua, ref))
+        resp = Response('\n'.join(out), mimetype='application/vnd.apple.mpegurl')
+        resp.headers['Cache-Control'] = 'no-store'
+        return resp
+    def gen():
+        try:
+            for chunk in r.iter_content(65536):
+                yield chunk
+        finally:
+            r.close()
+    resp = Response(gen(), mimetype=ct.split(';')[0])
+    resp.headers['Cache-Control'] = 'no-store'
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+def make_playlist_response():
+    proxy_mode = request.args.get('proxy') == '1'
+    with cache_lock:
+        chans = list(alive_list)
+    data = build_playlist(chans, proxy_mode) if chans else playlist_cache
+    resp = Response(data, mimetype='application/vnd.apple.mpegurl')
+    resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+def quick_seed():
+    logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
+    seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
+    entries = {}
+    seen = set()
+    reasons = Counter()
+    ex = ThreadPoolExecutor(max_workers=12)
+    try:
+        for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
+            if txt:
+                parse_m3u(txt, entries, seen, reasons)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+    raw = list(entries.values())[:1000]
+    if not raw:
+        logger.warning("⚡ Стартовый набор пуст, ждём большой прогон")
+        return []
+    alive = []
+    ex = ThreadPoolExecutor(max_workers=40)
+    futs = {ex.submit(check_one, ch, SEED_TIMEOUT): ch for ch in raw}
+    try:
+        for f in as_completed(futs.keys(), timeout=90):
+            ch = futs[f]
+            try:
+                ok = bool(f.result())
+            except Exception:
+                ok = False
+            if ok:
+                alive.append(ch)
+            brain.record(urlparse(ch['url']).netloc, ok)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+    return alive
+
+def health_sweep():
+    with cache_lock:
+        snapshot = list(alive_list)
+    if not snapshot or is_updating:
+        return
+    logger.info(f"🩺 Проверка здоровья: {len(snapshot)} каналов...")
+    survivors = []
+    dead = 0
+    ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
+    futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT): ch for ch in snapshot}
+    try:
+        for f in as_completed(futs.keys(), timeout=600):
+            ch = futs[f]
+            try:
+                ok = bool(f.result())
+            except Exception:
+                ok = False
+            if ok:
+                survivors.append(ch)
+                DEAD_STRIKES.pop(ch['url'], None)
+            else:
+                n = DEAD_STRIKES.get(ch['url'], 0) + 1
+                if n >= DEAD_LIMIT:
+                    dead += 1
+                else:
+                    DEAD_STRIKES[ch['url']] = n
+                    survivors.append(ch)
+            brain.record(ch.get('host', urlparse(ch['url']).netloc), ok)
+    except TimeoutError:
+        logger.warning("⏳ Таймаут проверки здоровья")
+    except Exception as e:
+        logger.error(f"Ошибка проверки здоровья: {e}")
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+    if dead and survivors:
+        flush_playlist(survivors, replace=True)
+    with cache_lock:
+        stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        stats['sweep_removed'] = dead
+    logger.info(f"🩺 Итог: живо {len(survivors)}, умерло {dead}")
+
+def sweep_worker():
+    while True:
+        time.sleep(SWEEP_EVERY)
+        try:
+            health_sweep()
+        except Exception as e:
+            logger.exception(f"🩺 Ошибка свипа: {e}")
+
+def update_cache():
+    global playlist_cache, is_updating
+    if is_updating:
+        return
+    is_updating = True
+    start = time.time()
+    logger.info("🔄 v" + VERSION + " Старт: комитет нейросетей + разведка...")
+    try:
+        api_channels, train_pairs, geo_pairs = fetch_iptv_org_api()
+        geo_net.train(geo_pairs, epochs=3, lr=0.1)
+        with cache_lock:
+            stats['geo_pairs'] = len(geo_pairs)
+        logger.info(f"🌍 Дипломат обучен на {len(geo_pairs)} примерах")
+
+        with cache_lock:
+            alive = list(alive_list)
+        alive_urls = set(ch['url'] for ch in alive)
+        alive_names = set(norm_name(ch['name']) for ch in alive)
+        for ch in quick_seed():
+            if ch['url'] not in alive_urls:
+                nk = norm_name(ch['name'])
+                if nk in alive_names:
+                    continue
+                alive_names.add(nk)
+                alive_urls.add(ch['url'])
+                alive.append(ch)
+        if alive:
+            flush_playlist(alive)
+        entries = {}
+        seen = set()
+        reasons = Counter()
+        logger.info(f"API iptv-org: потоков РФ/СНГ: {len(api_channels)}, "
+                    f"точных меток для Ирочки: {len(train_pairs)}")
+        for ach in api_channels:
+            name = ach['name']
+            if not name:
+                continue
+            reason = reject_reason(name, ach['url'])
+            if reason:
+                reasons[reason] += 1
+                continue
+            url = ach['url']
+            if url in seen:
+                continue
+            seen.add(url)
+            cat = api_category(ach.get('cats')) or get_category(name)
+            inf = '#EXTINF:-1'
+            if ach.get('cid'):
+                inf += ' tvg-id="' + ach['cid'] + '"'
+            if ach.get('logo'):
+                inf += ' tvg-logo="' + ach['logo'] + '"'
+            inf += ' group-title="' + cat + '",' + name
+            key = norm_name(name)
+            new_ch = {'inf': inf, 'url': url, 'cat': cat, 'name': name, 'ua': ach['ua'], 'ref': ach['ref']}
+            if key in entries:
+                if is_hd(name) and not is_hd(entries[key]['name']):
+                    entries[key] = new_ch
+            else:
+                entries[key] = new_ch
+        regions = fetch_ru_regions()
+        if not regions:
+            regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u' for r in FALLBACK_REGIONS]
+        base = list(set(STATIC_SOURCES + regions))
+        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab()
+                         + fetch_bitbucket() + fetch_gitea_family()
+                         + fetch_web_search() + fetch_telegram()) - set(base))
+        sources = base + extra[:MAX_EXTRA_SOURCES]
+        logger.info(f"ВСЕГО источников: {len(sources)}")
+        loaded = 0
+        ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
+        futs = [ex.submit(fetch_source_text, u) for u in sources]
+        try:
+            for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
+                try:
+                    txt = f.result()
+                except Exception:
+                    txt = None
+                if txt:
+                    loaded += 1
+                    parse_m3u(txt, entries, seen, reasons)
+        except TimeoutError:
+            logger.warning(f"⏳ Таймаут фазы источников ({SOURCE_PHASE_MAX}с), успело: {loaded}")
+        except Exception as e:
+            logger.error(f"Ошибка фазы источников: {e}")
+        finally:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                ex.shutdown(wait=False)
+        logger.info(f"Загружено и распарсено плейлистов: {loaded}")
+        logger.info(f"Фильтры вырезали: {dict(reasons)}")
+        with cache_lock:
+            stats['filtered'] = dict(reasons)
+        kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Об
