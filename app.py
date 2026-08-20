@@ -21,173 +21,22 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-VERSION = '3.3'
+VERSION = '4.0'
 
-STATIC_SOURCES = [
-    "https://iptv-org.github.io/iptv/countries/ru.m3u",
-    "https://iptv-org.github.io/iptv/languages/rus.m3u",
-    "https://iptv-org.github.io/iptv/languages/tat.m3u",
-    "https://iptv-org.github.io/iptv/languages/che.m3u",
-    "https://iptv-org.github.io/iptv/languages/bak.m3u",
-    "https://iptv-org.github.io/iptv/languages/chv.m3u",
-    "https://iptv-org.github.io/iptv/languages/udm.m3u",
-    "https://iptv-org.github.io/iptv/languages/sah.m3u",
-    "https://iptv-org.github.io/iptv/languages/bel.m3u",
-    "https://iptv-org.github.io/iptv/languages/kaz.m3u",
-    "https://iptv-org.github.io/iptv/languages/uzb.m3u",
-    "https://iptv-org.github.io/iptv/languages/kir.m3u",
-    "https://iptv-org.github.io/iptv/languages/tgk.m3u",
-    "https://iptv-org.github.io/iptv/languages/arm.m3u",
-    "https://iptv-org.github.io/iptv/languages/aze.m3u",
-    "https://iptv-org.github.io/iptv/languages/rum.m3u",
-    "https://iptv-org.github.io/iptv/languages/kat.m3u",
-    "https://iptv-org.github.io/iptv/countries/by.m3u",
-    "https://iptv-org.github.io/iptv/countries/kz.m3u",
-    "https://iptv-org.github.io/iptv/countries/kg.m3u",
-    "https://iptv-org.github.io/iptv/countries/uz.m3u",
-    "https://iptv-org.github.io/iptv/countries/am.m3u",
-    "https://iptv-org.github.io/iptv/countries/az.m3u",
-    "https://iptv-org.github.io/iptv/countries/ge.m3u",
-    "https://iptv-org.github.io/iptv/countries/md.m3u",
-    "https://iptv-org.github.io/iptv/countries/tj.m3u",
-    "https://iptv-org.github.io/iptv/countries/il.m3u",
-    "https://iptv-org.github.io/iptv/countries/de.m3u",
-    "https://iptv-org.github.io/iptv/countries/us.m3u",
-    "https://iptv-org.github.io/iptv/index.m3u",
-    "https://iptv-org.github.io/iptv/categories/news.m3u",
-    "https://iptv-org.github.io/iptv/categories/movies.m3u",
-    "https://iptv-org.github.io/iptv/categories/sports.m3u",
-    "https://iptv-org.github.io/iptv/categories/kids.m3u",
-    "https://iptv-org.github.io/iptv/categories/music.m3u",
-    "https://iptv-org.github.io/iptv/categories/documentary.m3u",
-    "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
-    "https://iptv-org.github.io/iptv/categories/general.m3u",
-    "https://iptv-org.github.io/iptv/categories/family.m3u",
-    "https://iptv-org.github.io/iptv/categories/culture.m3u",
-    "https://iptv-org.github.io/iptv/categories/education.m3u",
-    "https://iptv-org.github.io/iptv/categories/food.m3u",
-    "https://iptv-org.github.io/iptv/categories/travel.m3u",
-    "https://iptv-org.github.io/iptv/categories/comedy.m3u",
-    "https://iptv-org.github.io/iptv/categories/series.m3u",
-    "https://iptv-org.github.io/iptv/categories/animation.m3u",
-    "https://iptv-org.github.io/iptv/categories/religious.m3u",
-    "https://iptv-org.github.io/iptv/categories/cooking.m3u",
-    "https://iptv-org.github.io/iptv/categories/health.m3u",
-    "https://iptv-org.github.io/iptv/categories/hobby.m3u",
-    "https://iptv-org.github.io/iptv/categories/home.m3u",
-    "https://iptv-org.github.io/iptv/categories/business.m3u",
-    "https://iptv-org.github.io/iptv/categories/relax.m3u",
-    "https://iptv-org.github.io/iptv/categories/science.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/index.m3u",
-    "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
-    "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
-    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
-    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
-    "https://raw.githubusercontent.com/smolnp/IPTVru/main/IPTVru.m3u",
-    "https://smolnp.github.io/IPTVru/IPTVru.m3u",
-    "http://iptv-list.mart.ru/playlist.m3u",
-    "https://m3u.su/m3u/sng.m3u",
-    "https://m3u.su/m3u/ru.m3u",
-    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
-    "https://webarmen.com/my/iptv/auto.m3u",
-    "https://new.m3u.su/rusm",
-    "https://new.m3u.su/so",
-    "https://new.m3u.su/runtv",
-    "https://new.m3u.su/rurt",
-    "https://new.m3u.su/rut",
-    "https://new.m3u.su/ruz",
-    "https://new.m3u.su/lgu",
-    "https://new.m3u.su/lgn",
-    "https://new.m3u.su/tvoe",
-    "https://new.m3u.su/h",
-    "https://new.m3u.su/mult",
-]
-
-HTML_SOURCES = [
-    "https://m3u.su/", "https://m3u.su/m3u/",
-    "https://sat-portal.com/plejlisty/4036-samoobnovlyaemye-plejlisty-2026",
-    "https://sat-portal.com/plejlisty/", "https://6x6.msk.ru/", "https://homtv.ru/",
-    "https://iptv-rus.com/", "https://iptv-rus.com/playlists/",
-    "https://pikniktv.info/viewtopic.php?t=6737", "https://pikniktv.info/viewforum.php?f=328",
-    "https://webarmen.com/my/iptv/", "https://go2tv.top/", "https://iptv.one/",
-    "https://iptv.best/", "https://iptv-channels.net/", "https://iptv-live.ru/",
-    "https://iptv-tv.ru/", "https://iptv-russia.online/", "https://vse-tv.net/",
-    "https://vse-tv.net/playlists.html", "https://forumtv.org/",
-    "https://webos-forums.ru/post167674.html",
-    "https://www.free-codecs.com/guides/free-popular-iptv-playlist.htm",
-    "https://github.com/iptv-org/iptv", "https://github.com/Free-iptv/iptv",
-    "https://github.com/4mirror/iptv", "https://github.com/hmlendea/iptv-playlist-aggregator",
-    "https://pskovline.tv/tvm3u.php", "https://onlinetv.ru/", "https://smotret-tv.online/",
-    "https://new.m3u.su/",
-]
-
-# 📂 Внешний конфиг источников (необязательно): sources.json рядом с app.py
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCES_FILE = os.path.join(BASE_DIR, 'sources.json')
-try:
-    with open(SOURCES_FILE, encoding='utf-8') as f:
-        _ext = json.load(f)
-    STATIC_SOURCES = list(dict.fromkeys(STATIC_SOURCES + _ext.get('static', [])))
-    HTML_SOURCES = list(dict.fromkeys(HTML_SOURCES + _ext.get('html', [])))
-    logging.getLogger(__name__).info(f"📂 sources.json: +{len(_ext.get('static', []))} static, +{len(_ext.get('html', []))} html")
-except Exception:
-    pass
-
-FALLBACK_REGIONS = [
-    "ru-kgd", "ru-mow", "ru-mos", "ru-spe", "ru-len", "ru-kda", "ru-ros", "ru-vgg",
-    "ru-sta", "ru-da", "ru-sam", "ru-ud", "ru-ta", "ru-ba", "ru-udm", "ru-per",
-    "ru-sve", "ru-che", "ru-tyu", "ru-oms", "ru-nvs", "ru-tom", "ru-kem", "ru-alt",
-    "ru-kya", "ru-irk", "ru-bu", "ru-sa", "ru-zab", "ru-pri", "ru-kha", "ru-amu",
-    "ru-sak", "ru-mag", "ru-kam", "ru-chu",
-]
-
-GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist', 'topic:iptv', 'iptv m3u8 ru']
-GH_COMMON_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u',
-                   'index.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8']
-PROBE_PATHS = ['ru.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u']
-WEB_QUERIES = ['iptv m3u ru', 'плейлист iptv m3u россия', 'iptv playlist m3u8 russia',
-               'iptv m3u8 ru бесплатно', 'site:t.me iptv m3u',
-               'iptv плейлист форум бесплатно 2026',
-               'm3u плейлист тв бесплатно скачать', 'агрегатор iptv плейлистов сайт']
-TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru',
-               'iptv_playlist', 'm3u_playlist', 'iptvfree', 'tv_playlist',
-               'iptv_rf', 'playlist_iptv', 'iptv_su', 'free_iptv_ru',
-               'iptv_list', 'ru_iptv', 'iptv_tv_ru', 'russia_iptv',
-               'iptv_2026', 'm3u8ru', 'iptv_playlist_ru', 'tv_m3u', 'iptvhub_ru']
-
-MAX_CHANNELS = 20000
-MAX_EXTRA_SOURCES = 200
-MAX_CHECK_POOL = 9000
-SOURCE_WORKERS = 12
-CHECK_WORKERS = 40
-CHECK_TIMEOUT = 40.0
-SEED_TIMEOUT = 8.0
-SOURCE_PHASE_MAX = 300
-CHECK_PHASE_MAX = 1500
-UPDATE_EVERY = 86400
-RETRY_IF_EMPTY = 600
-FLUSH_EVERY = 10
-HEARTBEAT_SEC = 20
-KEEPALIVE_SEC = 60
-SWEEP_EVERY = 21600
-SWEEP_TIMEOUT = 15.0
-SWEEP_WORKERS = 30
-DEAD_LIMIT = 3
-MAX_PLAYLIST_BYTES = 2_000_000
-MAX_HTML_BYTES = 524_288
-NET_P_MIN = 0.45
-NET_MARGIN = 0.12
-GEO_P_MIN = 0.6
-GEO_MARGIN = 0.2
-HOST_REP_MIN = 0.15
-HOST_REP_CNT = 10
-
-# ⚙️ Веса скоринга (тюнинг в одном месте)
-W_MODEL, W_REP, W_HEUR = 0.5, 0.35, 0.15
-W_REP_COLD, W_HEUR_COLD, W_CNT_COLD = 0.55, 0.25, 0.2
-H_HTTPS, H_M3U8, H_NOTOKEN = 0.5, 0.3, 0.2
+# ==================== CONFIG: все «магические числа» в одном месте ====================
+CONFIG = {
+    'MAX_CHANNELS': 20000, 'MAX_EXTRA_SOURCES': 200, 'MAX_CHECK_POOL': 9000,
+    'SOURCE_WORKERS': 12, 'CHECK_WORKERS': 40, 'CHECK_TIMEOUT': 40.0,
+    'SEED_TIMEOUT': 8.0, 'SOURCE_PHASE_MAX': 300, 'CHECK_PHASE_MAX': 1500,
+    'UPDATE_EVERY': 86400, 'RETRY_IF_EMPTY': 600, 'FLUSH_EVERY': 10,
+    'KEEPALIVE_SEC': 60, 'SWEEP_EVERY': 21600, 'SWEEP_TIMEOUT': 15.0,
+    'SWEEP_WORKERS': 30, 'DEAD_LIMIT': 3,
+    'MAX_PLAYLIST_BYTES': 2000000, 'MAX_HTML_BYTES': 524288,
+    'NET_P_MIN': 0.45, 'NET_MARGIN': 0.12, 'GEO_P_MIN': 0.6, 'GEO_MARGIN': 0.2,
+    'HOST_REP_MIN': 0.15, 'HOST_REP_CNT': 10,
+    'SCORE_W_MODEL': 0.5, 'SCORE_W_REP': 0.35, 'SCORE_W_HEUR': 0.15,
+    'SCORE_W_REP_COLD': 0.55, 'SCORE_W_HEUR_COLD': 0.25, 'SCORE_W_SEEN_COLD': 0.2,
+}
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
@@ -267,50 +116,39 @@ BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'ограничен', 'недоступен', 'роскомнадзор',
                  'не показывает', 'на этой территории', 'territory']
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
 DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
-MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.json')
+MODEL_JSON = os.path.join(BASE_DIR, 'ml_model.json')
 
 SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
 
-# ==================== 💾 SQLite: один коннект + очередь записи ====================
-db_conn = None
-db_lock = threading.Lock()
-DB_Q = queue.Queue()
-try:
-    db_conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    with db_lock:
-        db_conn.execute('CREATE TABLE IF NOT EXISTS checks '
-                        '(id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, alive INTEGER, ts REAL)')
-        db_conn.commit()
-except Exception as e:
-    logger.error(f"💾 SQLite недоступна: {e}")
-    db_conn = None
+# ==================== ИСТОЧНИКИ: sources.json + встроенный минимум ====================
+FALLBACK_SOURCES = {
+    'static': ["https://iptv-org.github.io/iptv/countries/ru.m3u",
+               "https://iptv-org.github.io/iptv/languages/rus.m3u",
+               "https://iptv-org.github.io/iptv/index.m3u"],
+    'html': ["https://m3u.su/", "https://new.m3u.su/"],
+    'github_queries': ['iptv ru', 'iptv russia', 'm3u ru', 'iptv playlist'],
+    'web_queries': ['iptv m3u ru', 'плейлист iptv m3u россия'],
+    'tg': ['iptvru', 'iptv_russia', 'russian_iptv'],
+}
 
-def db_writer_worker():
-    """Единственный поток-писатель: батчи INSERT, без database-is-locked"""
-    commits = 0
-    while True:
-        batch = []
-        try:
-            batch.append(DB_Q.get(timeout=5))
-            while True:
-                batch.append(DB_Q.get_nowait())
-        except queue.Empty:
-            pass
-        if not batch or db_conn is None:
-            continue
-        try:
-            with db_lock:
-                db_conn.executemany('INSERT INTO checks (host, alive, ts) VALUES (?,?,?)', batch)
-                db_conn.commit()
-                commits += 1
-                if commits % 20 == 0:
-                    db_conn.execute('DELETE FROM checks WHERE id NOT IN '
-                                    '(SELECT id FROM checks ORDER BY ts DESC LIMIT 20000)')
-                    db_conn.commit()
-        except Exception as e:
-            logger.error(f"💾 DB writer: {e}")
+def load_sources():
+    cfg = {k: list(v) for k, v in FALLBACK_SOURCES.items()}
+    try:
+        with open(os.path.join(BASE_DIR, 'sources.json'), encoding='utf-8') as f:
+            d = json.load(f)
+        for k in cfg:
+            if isinstance(d.get(k), list) and d[k]:
+                cfg[k] = d[k]
+        logger.info(f"📚 sources.json: {len(cfg['static'])} статики, {len(cfg['html'])} html, "
+                    f"{len(cfg['tg'])} tg")
+    except Exception as e:
+        logger.warning(f"📚 sources.json недоступен, встроенный минимум: {e}")
+    return cfg
+
+SOURCES = load_sources()
 
 def proxy_url(u, ua=None, ref=None):
     q = SELF_URL + '/proxy?url=' + quote(u, safe='')
@@ -326,7 +164,7 @@ def _sig(z):
     ez = math.exp(z)
     return ez / (1.0 + ez)
 
-# ==================== 🛡 Смотритель (веса в JSON, без pickle) ====================
+# ==================== 🛡 СМОТРИТЕЛЬ (веса в JSON, без pickle) ====================
 class TinyLR:
     def __init__(self, n=12):
         self.w = [0.0] * n
@@ -430,31 +268,75 @@ def apply_net(ch_list):
     for ch in ch_list:
         if ch['cat'] == 'Общие':
             pred, p1, p2 = cat_net.predict(ch['name'])
-            if pred and p1 >= NET_P_MIN and (p1 - p2) >= NET_MARGIN:
+            if pred and p1 >= CONFIG['NET_P_MIN'] and (p1 - p2) >= CONFIG['NET_MARGIN']:
                 ch['cat'] = pred
                 ch['inf'] = ch['inf'].replace('group-title="Общие"', 'group-title="' + pred + '"')
                 moved += 1
     return moved
 
+# ==================== SQLite: WAL + очередь записи одним потоком ====================
+class CheckDB:
+    def __init__(self, path):
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db.execute('CREATE TABLE IF NOT EXISTS checks '
+                        '(id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, alive INTEGER, ts REAL)')
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.db.execute('PRAGMA synchronous=NORMAL')
+        self.db.commit()
+        self.q = queue.Queue()
+        self.lock = threading.RLock()
+        threading.Thread(target=self._writer, daemon=True).start()
+    def _writer(self):
+        buf = []
+        last = time.time()
+        while True:
+            try:
+                buf.append(self.q.get(timeout=1.0))
+            except queue.Empty:
+                pass
+            try:
+                while True:
+                    buf.append(self.q.get_nowait())
+            except queue.Empty:
+                pass
+            if buf and (len(buf) >= 50 or time.time() - last >= 2.0):
+                try:
+                    with self.lock:
+                        self.db.executemany('INSERT INTO checks (host, alive, ts) VALUES (?,?,?)', buf)
+                        self.db.execute('DELETE FROM checks WHERE id NOT IN '
+                                        '(SELECT id FROM checks ORDER BY ts DESC LIMIT 20000)')
+                        self.db.commit()
+                except Exception:
+                    pass
+                buf = []
+                last = time.time()
+    def record(self, host, alive):
+        self.q.put((host, 1 if alive else 0, time.time()))
+    def load_history(self):
+        with self.lock:
+            return self.db.execute('SELECT host, SUM(alive), COUNT(*) FROM checks '
+                                   'GROUP BY host').fetchall()
+
 class MLBrain:
     def __init__(self):
         self.host_alive, self.host_total = {}, {}
-        self.model = TinyLR.load(MODEL_FILE)
+        self.model = None
         self.trained_samples = 0
         self.last_accuracy = 0.0
+        self.db = None
         self.lock = threading.RLock()
-        if db_conn is not None:
-            try:
-                with db_lock:
-                    rows = db_conn.execute('SELECT host, SUM(alive), COUNT(*) FROM checks GROUP BY host').fetchall()
-                for host, s, c in rows:
-                    self.host_alive[host] = int(s)
-                    self.host_total[host] = int(c)
-                logger.info(f"🧠 ML: история из БД: {len(rows)} хостов")
-            except Exception as e:
-                logger.error(f"🧠 ML: БД недоступна: {e}")
+        try:
+            self.db = CheckDB(DB_FILE)
+            for host, s, c in self.db.load_history():
+                self.host_alive[host] = int(s)
+                self.host_total[host] = int(c)
+            logger.info(f"🧠 ML: история из БД: {len(self.host_total)} хостов")
+        except Exception as e:
+            logger.error(f"🧠 ML: БД недоступна: {e}")
+            self.db = None
+        self.model = TinyLR.load(MODEL_JSON)
         if self.model:
-            logger.info("🧠 ML: нейрон загружен (JSON)")
+            logger.info("🧠 ML: нейрон загружен из JSON")
     def host_stats(self, host):
         with self.lock:
             t = self.host_total.get(host, 0)
@@ -466,7 +348,8 @@ class MLBrain:
         with self.lock:
             self.host_total[host] = self.host_total.get(host, 0) + 1
             self.host_alive[host] = self.host_alive.get(host, 0) + (1 if alive else 0)
-        DB_Q.put((host, 1 if alive else 0, time.time()))
+        if self.db is not None:
+            self.db.record(host, alive)
     def model_prob(self, feats):
         if self.model is None:
             return None
@@ -476,11 +359,13 @@ class MLBrain:
             return None
     def score(self, feats, host):
         rep, cnt = self.host_stats(host)
-        heur = H_HTTPS * feats[2] + H_M3U8 * feats[3] + H_NOTOKEN * (1.0 - feats[5])
+        heur = 0.5 * feats[2] + 0.3 * feats[3] + 0.2 * (1.0 - feats[5])
         p = self.model_prob(feats)
         if p is None:
-            return W_REP_COLD * rep + W_HEUR_COLD * heur + W_CNT_COLD * min(cnt / 10.0, 1.0)
-        return W_MODEL * p + W_REP * rep + W_HEUR * heur
+            return (CONFIG['SCORE_W_REP_COLD'] * rep + CONFIG['SCORE_W_HEUR_COLD'] * heur +
+                    CONFIG['SCORE_W_SEEN_COLD'] * min(cnt / 10.0, 1.0))
+        return (CONFIG['SCORE_W_MODEL'] * p + CONFIG['SCORE_W_REP'] * rep +
+                CONFIG['SCORE_W_HEUR'] * heur)
     def train(self, samples):
         if not samples or len(samples) < 20:
             return
@@ -502,7 +387,7 @@ class MLBrain:
             self.trained_samples += len(samples)
             if acc is not None:
                 self.last_accuracy = acc
-            self.model.save(MODEL_FILE)
+            self.model.save(MODEL_JSON)
             logger.info(f"🧠 ML: дообучено на {len(samples)} примерах "
                         f"(всего {self.trained_samples}), acc до: {acc if acc is not None else 'н/д'}")
         except Exception as e:
@@ -580,7 +465,7 @@ def save_disk_cache(data):
 def keepalive_worker():
     n = 0
     while True:
-        time.sleep(KEEPALIVE_SEC)
+        time.sleep(CONFIG['KEEPALIVE_SEC'])
         n += 1
         logger.info("💓 жив")
         if n % 5 == 0:
@@ -626,799 +511,10 @@ RADIO_WORDS = _clean([
     'europa plus', 'европа плюс', 'шансон', 'dfm', 'monte carlo', 'maximum',
     'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
     'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm',
-    'маяк', 'вести fm', 'радио дача', 'радио 7', 'радио энерджи', 'хит fm'])
+    'маяк', 'вестей fm', 'эхо', 'love radio', 'хит fm', 'радио дача'])
 LATIN_RU_WORDS = _clean([
     'rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pervy', 'channel one',
     'match tv', 'match!', 'zvezda', 'karusel', 'carousel', 'muz-tv', 'muz tv',
     'ru.tv', 'rutv', 'tv1000', 'tv 1000', 'ren tv', 'ntv', 'sts', 'tnt',
     'rossiya', 'rossia', 'russia', 'vesti', 'izvestia', 'kultura', 'soyuz',
-    'spas', 'domashniy', 'pyatnitsa', 'subbota', 'mir tv', 'otr', 'tv centr',
-    'tv center', 'telekanal', '360', '8 kanal', 'shanson tv', 'retro tv',
-    'amedia', 'moscow 24', 'moskva 24', 'peterburg', 'petersburg', 'len tv',
-    'kinopoisk', 'illuzion'])
-BAD_URL_WORDS = _clean(['wink.ru', 'wink.', 'okko.tv', 'ivi.ru', 'more.tv',
-                        'kion.ru', 'start.ru', 'premier.one', 'geoblock', 'geo-block'])
-JUNK_WORDS = _clean(['webcam', 'камера', 'camera', 'без названия', 'безымянный',
-                     'test channel', 'проверка'])
-JUNK_NAMES = {'index', 'index.m3u8', 'playlist', 'playlist.m3u8', 'live', 'test',
-              'stream', 'video', 'm3u', 'channel', 'tv', '1', 'hd', 'fhd', '4k',
-              'main', 'default', 'unknown', 'без названия', 'безымянный'}
-
-def _read_capped(resp, cap):
-    chunks = []
-    total = 0
-    for c in resp.iter_content(65536):
-        chunks.append(c)
-        total += len(c)
-        if total >= cap:
-            break
-    resp.close()
-    return b''.join(chunks).decode('utf-8', errors='ignore')
-
-def fetch_dynamic():
-    found = set()
-    for page in HTML_SOURCES:
-        try:
-            time.sleep(random.uniform(0.3, 0.9))
-            r = get_session().get(page, headers=polite_headers(), timeout=(5, 10), verify=False, stream=True)
-            if r.status_code == 200:
-                html = _read_capped(r, MAX_HTML_BYTES)
-                found.update(re.findall(r'(https?://[^\s"\'<>]+?\.m3u8?)', html, re.I))
-                if 'new.m3u.su' in page:
-                    found.update(re.findall(r'https://new\.m3u\.su/[a-z0-9]{2,8}(?![\w/])', html))
-            else:
-                r.close()
-        except Exception:
-            pass
-    return list(found)
-
-def fetch_ru_regions():
-    try:
-        r = get_session().get("https://iptv-org.github.io/api/regions.json", timeout=(5, 10), headers=HEADERS_WEB)
-        if r.status_code != 200:
-            return []
-        urls = []
-        for reg in r.json():
-            code = str(reg.get('code', ''))
-            if code.upper().startswith('RU-'):
-                urls.append('https://iptv-org.github.io/iptv/regions/' + code.lower() + '.m3u')
-        return urls
-    except Exception:
-        return []
-
-def fetch_github():
-    sess = get_session()
-    gh_headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/vnd.github+json'}
-    repos = []
-    for q in GITHUB_QUERIES:
-        try:
-            r = sess.get('https://api.github.com/search/repositories',
-                         params={'q': q, 'per_page': 15, 'sort': 'stars', 'order': 'desc'},
-                         headers=gh_headers, timeout=(5, 15))
-            if r.status_code == 200:
-                for item in r.json().get('items', []):
-                    full = item.get('full_name')
-                    branch = item.get('default_branch') or 'main'
-                    if full:
-                        repos.append((full, branch))
-        except Exception:
-            continue
-    repos = list(dict.fromkeys(repos))[:40]
-    logger.info(f"GitHub: репозиториев: {len(repos)}")
-    found = set()
-    def read_readme(repo_branch):
-        full, branch = repo_branch
-        try:
-            time.sleep(random.uniform(0.2, 0.7))
-            r = get_session().get('https://raw.githubusercontent.com/' + full + '/' + branch + '/README.md',
-                                  headers=polite_headers(), timeout=(5, 10), stream=True)
-            if r.status_code == 200:
-                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I)
-            r.close()
-        except Exception:
-            pass
-        return []
-    ex = ThreadPoolExecutor(max_workers=10)
-    try:
-        for links in ex.map(read_readme, repos, timeout=90):
-            found.update(links)
-    except Exception:
-        pass
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
-    for full, branch in repos:
-        base = 'https://raw.githubusercontent.com/' + full + '/' + branch
-        for path in GH_COMMON_PATHS:
-            found.add(base + '/' + path)
-    return list(found)
-
-def fetch_gitlab():
-    found = set()
-    try:
-        r = get_session().get('https://gitlab.com/api/v4/projects',
-                              params={'search': 'iptv', 'per_page': 15}, headers=HEADERS_WEB, timeout=(5, 15))
-        if r.status_code == 200:
-            for p in r.json():
-                path = p.get('path_with_namespace')
-                branch = p.get('default_branch') or 'main'
-                if path:
-                    for pth in PROBE_PATHS:
-                        found.add('https://gitlab.com/' + path + '/-/raw/' + branch + '/' + pth)
-    except Exception:
-        pass
-    return list(found)
-
-def fetch_bitbucket():
-    found = set()
-    try:
-        r = get_session().get('https://api.bitbucket.org/2.0/repositories',
-                              params={'q': 'name ~ "iptv"', 'pagelen': 15}, headers=HEADERS_WEB, timeout=(5, 15))
-        if r.status_code == 200:
-            for v in r.json().get('values', []):
-                full = v.get('full_name')
-                branch = (v.get('mainbranch') or {}).get('name') or 'master'
-                if full:
-                    for pth in PROBE_PATHS:
-                        found.add('https://bitbucket.org/' + full + '/raw/' + branch + '/' + pth)
-    except Exception:
-        pass
-    return list(found)
-
-def fetch_gitea_family():
-    found = set()
-    apis = [
-        ('https://codeberg.org/api/v1/repos/search?q=iptv&limit=10', 'https://codeberg.org/', '/raw/branch/'),
-        ('https://gitea.com/api/v1/repos/search?q=iptv&limit=10', 'https://gitea.com/', '/raw/'),
-    ]
-    for url, base, rawfmt in apis:
-        try:
-            r = get_session().get(url, headers=HEADERS_WEB, timeout=(5, 15))
-            if r.status_code == 200:
-                for repo in r.json().get('data', []):
-                    full = repo.get('full_name')
-                    branch = repo.get('default_branch') or 'main'
-                    if full:
-                        for pth in PROBE_PATHS:
-                            found.add(base + full + rawfmt + branch + '/' + pth)
-        except Exception:
-            continue
-    return list(found)
-
-def fetch_web_search():
-    m3u = set()
-    pages = []
-    for q in WEB_QUERIES:
-        try:
-            time.sleep(random.uniform(0.5, 1.2))
-            r = get_session().get('https://html.duckduckgo.com/html/',
-                                  params={'q': q}, headers=polite_headers(), timeout=(5, 15))
-            if r.status_code != 200:
-                continue
-            m3u.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
-            for enc in re.findall(r'uddg=([^&"]+)', r.text):
-                pages.append(unquote(enc))
-        except Exception:
-            continue
-    def scrape(page):
-        try:
-            time.sleep(random.uniform(0.3, 0.9))
-            r = get_session().get(page, headers=polite_headers(), timeout=(5, 10), verify=False, stream=True)
-            if r.status_code == 200:
-                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I)
-            r.close()
-        except Exception:
-            pass
-        return []
-    ex = ThreadPoolExecutor(max_workers=8)
-    try:
-        for links in ex.map(scrape, pages[:25], timeout=90):
-            m3u.update(links)
-    except Exception:
-        pass
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
-    logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
-    return list(m3u)
-
-def fetch_telegram():
-    found = set()
-    for ch in TG_CHANNELS:
-        try:
-            time.sleep(random.uniform(0.4, 1.0))
-            r = get_session().get('https://t.me/s/' + ch, headers=polite_headers(), timeout=(5, 10), stream=True)
-            if r.status_code == 200:
-                found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I))
-            else:
-                r.close()
-        except Exception:
-            continue
-    logger.info(f"Telegram: ссылок: {len(found)}")
-    return list(found)
-
-def fetch_iptv_org_api():
-    try:
-        sess = get_session()
-        ch_r = sess.get("https://iptv-org.github.io/api/channels.json", timeout=(10, 60), headers=HEADERS_WEB)
-        st_r = sess.get("https://iptv-org.github.io/api/streams.json", timeout=(10, 60), headers=HEADERS_WEB)
-        if ch_r.status_code != 200 or st_r.status_code != 200:
-            return [], [], []
-        names = {}
-        meta = {}
-        train_pairs = []
-        geo_pairs = []
-        for ch in ch_r.json():
-            if ch.get('is_nsfw'):
-                continue
-            name = ch.get('name', '')
-            country = ch.get('country') or ''
-            if name and len(name) >= 3:
-                geo_pairs.append((name, 'CIS' if country in CIS_COUNTRIES else 'OTHER'))
-            if ch.get('country') == 'UA':
-                continue
-            cat = api_category(ch.get('categories') or [])
-            if name and cat:
-                train_pairs.append((name, cat))
-            langs = []
-            for lng in (ch.get('languages') or []):
-                langs.append(lng.get('code') if isinstance(lng, dict) else lng)
-            if country in CIS_COUNTRIES or 'rus' in langs:
-                names[ch.get('id')] = name
-                meta[ch.get('id')] = {
-                    'logo': ch.get('logo') or '',
-                    'cid': ch.get('id') or '',
-                    'cats': ch.get('categories') or [],
-                }
-        result = []
-        for s in st_r.json():
-            cid = s.get('channel')
-            url = s.get('url')
-            if cid in names and url and url.startswith('http'):
-                m = meta.get(cid, {})
-                result.append({
-                    'url': url, 'name': names[cid], 'cats': m.get('cats', []),
-                    'logo': m.get('logo', ''), 'cid': m.get('cid', ''),
-                    'ua': s.get('user_agent') or '', 'ref': s.get('http_referrer') or '',
-                })
-        return result, train_pairs, geo_pairs
-    except Exception as e:
-        logger.error(f"Ошибка API iptv-org: {e}")
-        return [], [], []
-
-def fetch_source_text(url):
-    host = urlparse(url).netloc
-    try:
-        time.sleep(random.uniform(0.3, 1.0))
-        sem = host_sem(host)
-        with sem:
-            r = get_session().get(url, timeout=(5, 10), headers=polite_headers(), verify=False, stream=True)
-            if r.status_code != 200:
-                r.close()
-                return None
-            text = _read_capped(r, MAX_PLAYLIST_BYTES)
-            return text if text else None
-    except Exception:
-        return None
-
-def is_adult(name):
-    return any(w in name.lower() for w in ADULT_WORDS)
-def is_ukrainian(name):
-    return any(w in name.lower() for w in UA_WORDS)
-def is_paywall(name):
-    n = name.lower()
-    return any(w in n for w in PAYWALL_WORDS) or any(w.lower() in n for w in BLACKLIST_WORDS)
-def is_radio(name):
-    n = name.lower()
-    return any(w in n for w in RADIO_WORDS) or bool(re.search(r'\bfm\b', n)) or 'радиостанция' in n
-def is_russian_like(name):
-    if re.search(r'[\u0400-\u04FF]', name):
-        pred, p1, p2 = geo_net.predict(name)
-        if pred == 'OTHER' and p1 >= GEO_P_MIN and (p1 - p2) >= GEO_MARGIN:
-            return False
-        return True
-    n = name.lower()
-    return any(w in n for w in LATIN_RU_WORDS)
-def is_bad_url(url):
-    u = url.lower()
-    return any(w in u for w in BAD_URL_WORDS)
-def norm_name(name):
-    n = name.lower().strip()
-    n = re.sub(r'[\(\[].*?[\)\]]', '', n)
-    n = re.sub(r'\b(hd|fhd|uhd|4k|sd|hevc|h265|h264)\b', '', n)
-    return re.sub(r'\s+', ' ', n).strip(' -_|')
-def is_junk(name):
-    n = norm_name(name)
-    if n in JUNK_NAMES or len(n) < 3:
-        return True
-    return any(w in n for w in JUNK_WORDS)
-def is_hd(name):
-    n = name.lower()
-    return 'hd' in n or '4k' in n or 'uhd' in n or 'fhd' in n
-def reject_reason(name, url=''):
-    if is_junk(name):
-        return 'junk'
-    if not is_russian_like(name):
-        return 'not_ru'
-    if is_adult(name):
-        return 'adult'
-    if is_ukrainian(name):
-        return 'ua'
-    if is_paywall(name):
-        return 'paywall'
-    if url and is_bad_url(url):
-        return 'geo'
-    return None
-
-def get_category(name):
-    if is_radio(name):
-        return 'Радио'
-    n = name.lower()
-    if any(w in n for w in ['дет', 'kids', 'мульт', 'cartoon', 'карусель', 'disney', 'gulli', 'аниме', 'anime', 'nick', 'tiji', 'baby', 'погоди', 'обезьянк', 'незнайк', 'смешар', 'простокваш', 'чебураш', 'карлсон', 'винни', 'попугай', 'богатыр', 'алёша', 'трёшка', 'мультимани']):
-        return 'Детские'
-    if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
-        return 'Новости'
-    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
-        return 'Спорт'
-    if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
-        return 'Кино и сериалы'
-    if any(w in n for w in ['музык', 'music', 'mtv', 'bridge', 'шансон', 'рутв', 'ru.tv', 'ретро', 'хит', 'жара', 'блюз', 'jazz', 'классик', 'classic', 'муз', 'tnt music', 'о2тв', 'o2tv', 'first music', 'музсоюз', 'клип']):
-        return 'Музыка'
-    if any(w in n for w in ['докум', 'doc', 'познав', 'истори', 'history', 'discovery', 'science', 'наука', 'природ', 'animal', 'животн', 'океан', 'космос', 'культур', 'искусств', 'театр', 'музей', 'образов', 'школ', 'язык', 'travel', 'путешеств', 'религ', 'relig', 'спас', 'союз', 'техник', 'техно', 'авто', 'auto', 'дача', 'сад', 'огород', 'рыбал', 'охота', 'кулинар', 'еда', 'food', 'здоров', 'health', 'медицин']):
-        return 'Познавательные'
-    if any(w in n for w in ['развлек', 'entertainment', 'юмор', 'comedy', 'камеди', 'квн', 'шоу', 'мода', 'fashion', 'стиль', 'lifestyle', 'лайфстайл', 'дом', 'home', 'семья', 'family', 'игры', 'game', 'лотерея', 'анекдот']):
-        return 'Развлекательные'
-    if any(w in n for w in ['москва', 'moscow', 'петербург', 'petersburg', 'лен тв', 'len tv', 'екатеринбург', 'новосибирск', 'казань', 'татарстан', 'уфа', 'башкортостан', 'самара', 'нижний новгород', 'краснодар', 'кубань', 'ростов', 'пермь', 'челябинск', 'омск', 'красноярск', 'владивосток', 'хабаровск', 'иркутск', 'тюмень', 'томск', 'барнаул', 'алтай', 'кемерово', 'кузбасс', 'удмуртия', 'ижевск', 'чувашия', 'чебоксары', 'мордовия', 'осетия', 'дагестан', 'грозный', 'чечня', 'кавказ', 'ставрополь', 'волгоград', 'саратов', 'тверь', 'тула', 'ярославль', 'воронеж', 'липецк', 'тамбов', 'брянск', 'курск', 'белгород', 'калуга', 'рязань', 'владимир', 'иваново', 'кострома', 'вологда', 'череповец', 'архангельск', 'мурманск', 'карелия', 'коми', 'калининград', 'псков', 'новгород', 'смоленск', 'якутск', 'якутия', 'бурятия', 'улан-удэ', 'чита', 'забайкаль', 'сахалин', 'магадан', 'камчатка', 'чукотка', 'сургут', 'югра', 'ямал', 'крым', 'севастополь', 'симферополь', 'сочи', 'минск', 'беларусь', 'гомель', 'брест', 'алматы', 'астана', 'ташкент', 'бишкек', 'душанбе', 'баку', 'ереван', 'кишинев', 'регион', 'regional', 'губерния', 'городской']):
-        return 'Региональные'
-    if any(w in n for w in ['первый канал', 'россия 1', 'россия к', 'нтв', 'тнт', 'стс', 'рен тв', 'пятый канал', 'тв центр', 'звезда', 'отр', 'пятница', 'суббота', 'домашний', 'муз-тв', '2x2', 'мир', 'channel one', 'pervyi', 'rossiya', 'russia 1', 'russia k', 'russia 24', 'ntv', 'ren tv', 'fifth channel', 'tv centr']):
-        return 'Федеральные'
-    return 'Общие'
-
-def _first_media_uri(text, base):
-    for l in text.splitlines():
-        s = l.strip()
-        if not s or s.startswith('#'):
-            continue
-        return s if s.startswith('http') else base + s
-    return None
-
-def check_one(ch, limit=None):
-    lim = limit or CHECK_TIMEOUT
-    url = ch['url']
-    headers = dict(HEADERS_PLAYER)
-    if ch.get('ua'):
-        headers['User-Agent'] = ch['ua']
-    if ch.get('ref'):
-        headers['Referer'] = ch['ref']
-    session = get_session()
-    start = time.monotonic()
-    def remaining():
-        return lim - (time.monotonic() - start)
-    try:
-        r = session.head(url, timeout=min(10, lim), headers=headers, allow_redirects=True, verify=False)
-        if r.status_code < 400:
-            ct = r.headers.get('content-type', '').lower()
-            if any(g in ct for g in GOOD_CT) and 'mpegurl' not in ct:
-                return True
-    except Exception:
-        pass
-    for _ in range(2):
-        if remaining() <= 1:
-            return False
-        try:
-            r = session.get(url, timeout=remaining(), headers=headers, stream=True, allow_redirects=True, verify=False)
-        except Exception:
-            continue
-        if r.status_code >= 400:
-            return False
-        ct = r.headers.get('content-type', '').lower()
-        try:
-            chunk = next(r.iter_content(chunk_size=2048), b'')
-        except Exception:
-            continue
-        finally:
-            r.close()
-        if not chunk:
-            return False
-        is_hls = ('mpegurl' in ct) or ('.m3u8' in url.lower()) or (chunk[:7] == b'#EXTM3U')
-        if not is_hls:
-            if any(g in ct for g in GOOD_CT):
-                return True
-            if chunk[:1] == b'\x47':
-                return True
-            low = chunk[:300].lower()
-            if b'<html' in low or b'<!doctype' in low or b'<script' in low:
-                return False
-            try:
-                txt_low = low.decode('utf-8', errors='ignore')
-            except Exception:
-                txt_low = ''
-            if any(m in txt_low for m in BLOCK_MARKERS):
-                return False
-            return True
-        try:
-            r2 = session.get(url, timeout=min(remaining(), 10), headers=headers,
-                             verify=False, allow_redirects=True)
-            text = r2.text[:200000]
-        except Exception:
-            return True
-        if '#EXTM3U' not in text:
-            return False
-        base = url.rsplit('/', 1)[0] + '/'
-        seg = _first_media_uri(text, base)
-        if not seg:
-            return False
-        if remaining() <= 1:
-            return True
-        try:
-            rs = session.get(seg, timeout=min(remaining(), 10), headers=headers,
-                             stream=True, verify=False, allow_redirects=True)
-            if rs.status_code >= 400:
-                return False
-            head = next(rs.iter_content(chunk_size=4096), b'')
-            rs.close()
-        except Exception:
-            return True
-        if not head:
-            return True
-        if head[:1] == b'\x47' or b'ftyp' in head[:16] or b'moov' in head[:32] \
-                or b'styp' in head[:16] or head[:7] == b'#EXTM3U':
-            return True
-        low = head[:200].lower()
-        if b'<html' in low or b'<!doctype' in low or any(m in low for m in BLOCK_MARKERS):
-            return False
-        return True
-    return False
-
-def parse_m3u(text, entries, seen_urls, reasons):
-    current_inf = ''
-    current_name = ''
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith('#EXTINF:'):
-            current_inf = line
-            m = re.search(r',\s*(.+)$', line)
-            current_name = m.group(1).strip() if m else ''
-        elif line.startswith('http'):
-            if current_name:
-                reason = reject_reason(current_name, line)
-                if reason:
-                    reasons[reason] += 1
-                elif line not in seen_urls:
-                    seen_urls.add(line)
-                    cat = get_category(current_name)
-                    inf = re.sub(r'\s*group-title="[^"]*"', '', current_inf)
-                    inf = re.sub(r'(#EXTINF:-?\d+)', r'\1 group-title="' + cat + '"', inf, count=1)
-                    ch = {'inf': inf, 'url': line, 'cat': cat, 'name': current_name, 'ua': '', 'ref': ''}
-                    key = norm_name(current_name)
-                    if key in entries:
-                        if is_hd(current_name) and not is_hd(entries[key]['name']):
-                            entries[key] = ch
-                    else:
-                        entries[key] = ch
-                        if len(entries) >= MAX_CHANNELS:
-                            return True
-            current_inf = ''
-            current_name = ''
-    return False
-
-def flush_playlist(alive, elapsed=None, replace=False):
-    global playlist_cache, alive_list
-    with cache_lock:
-        current = list(alive_list)
-    if elapsed is None and not replace and current:
-        have = set(c['url'] for c in current)
-        have_names = set(norm_name(c['name']) for c in current)
-        merged = current
-        for ch in alive:
-            nk = norm_name(ch['name'])
-            if ch['url'] not in have and nk not in have_names:
-                have.add(ch['url'])
-                have_names.add(nk)
-                merged.append(ch)
-        alive = merged
-    def sort_key(ch):
-        try:
-            i = CAT_ORDER.index(ch['cat'])
-        except ValueError:
-            i = len(CAT_ORDER)
-        return (i, ch['name'].lower())
-    alive_sorted = sorted(alive, key=sort_key)
-    if not alive_sorted:
-        return
-    cat_counts = Counter(ch['cat'] for ch in alive_sorted)
-    lines = [
-        '#EXTM3U url-tvg="' + EPG_URLS + '"',
-        '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M'),
-        '# Живых каналов: ' + str(len(alive_sorted)) + ' | без 18+ | без UA | радио отдельно',
-    ]
-    for ch in alive_sorted:
-        lines.append(ch['inf'])
-        lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
-        if ch.get('ref'):
-            lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
-        lines.append(ch['url'])
-    data = '\n'.join(lines)
-    with cache_lock:
-        playlist_cache = data
-        alive_list = alive_sorted
-        stats['alive_channels'] = len(alive_sorted)
-        stats['categories'] = dict(cat_counts)
-        if elapsed is not None:
-            stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
-            stats['duration_sec'] = round(elapsed, 1)
-    save_disk_cache(data)
-
-def build_playlist(chans, proxied):
-    lines = [
-        '#EXTM3U url-tvg="' + EPG_URLS + '"',
-        '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M') +
-        (' | PROXY' if proxied else ' | DIRECT'),
-    ]
-    for ch in chans:
-        lines.append(ch['inf'])
-        if proxied:
-            ua = ch.get('ua') or 'VLC/3.0.20 LibVLC/3.0.20'
-            lines.append(proxy_url(ch['url'], ua, ch.get('ref')))
-        else:
-            lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
-            if ch.get('ref'):
-                lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
-            lines.append(ch['url'])
-    return '\n'.join(lines)
-
-@app.route('/proxy')
-def proxy():
-    url = request.args.get('url')
-    if not url:
-        return ('', 400)
-    ua = request.args.get('ua') or HEADERS_PLAYER['User-Agent']
-    ref = request.args.get('ref')
-    hdr = {'User-Agent': ua}
-    if ref:
-        hdr['Referer'] = ref
-    try:
-        r = requests.get(url, headers=hdr, stream=True, timeout=(10, 30),
-                         verify=False, allow_redirects=True)
-    except Exception:
-        return ('', 502)
-    if r.status_code >= 400:
-        r.close()
-        return ('', 502)
-    ct = (r.headers.get('Content-Type') or 'application/octet-stream').lower()
-    if 'mpegurl' in ct or url.lower().endswith(('.m3u8', '.m3u')):
-        text = r.text
-        r.close()
-        base = url.rsplit('/', 1)[0] + '/'
-        out = []
-        for line in text.splitlines():
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith('#'):
-                if 'URI="' in s:
-                    m = re.search(r'URI="([^"]+)"', s)
-                    if m:
-                        u2 = m.group(1)
-                        abs_u = u2 if u2.startswith('http') else base + u2
-                        s = s.replace(m.group(0), 'URI="' + proxy_url(abs_u, ua, ref) + '"')
-                out.append(s)
-            else:
-                abs_u = s if s.startswith('http') else base + s
-                out.append(proxy_url(abs_u, ua, ref))
-        resp = Response('\n'.join(out), mimetype='application/vnd.apple.mpegurl')
-        resp.headers['Cache-Control'] = 'no-store'
-        return resp
-    def gen():
-        try:
-            for chunk in r.iter_content(65536):
-                yield chunk
-        finally:
-            r.close()
-    resp = Response(gen(), mimetype=ct.split(';')[0])
-    resp.headers['Cache-Control'] = 'no-store'
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    return resp
-
-def make_playlist_response():
-    proxy_mode = request.args.get('proxy') == '1'
-    with cache_lock:
-        chans = list(alive_list)
-    data = build_playlist(chans, proxy_mode) if chans else playlist_cache
-    resp = Response(data, mimetype='application/vnd.apple.mpegurl')
-    resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
-    resp.headers['Cache-Control'] = 'no-store'
-    return resp
-
-def quick_seed():
-    logger.info("⚡ Быстрый стартовый набор: надёжные источники iptv-org...")
-    seed_sources = [u for u in STATIC_SOURCES if 'iptv-org.github.io' in u][:12]
-    entries = {}
-    seen = set()
-    reasons = Counter()
-    ex = ThreadPoolExecutor(max_workers=12)
-    try:
-        for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
-            if txt:
-                parse_m3u(txt, entries, seen, reasons)
-    except Exception:
-        pass
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
-    raw = list(entries.values())[:1000]
-    if not raw:
-        logger.warning("⚡ Стартовый набор пуст, ждём большой прогон")
-        return []
-    alive = []
-    ex = ThreadPoolExecutor(max_workers=40)
-    futs = {ex.submit(check_one, ch, SEED_TIMEOUT): ch for ch in raw}
-    try:
-        for f in as_completed(futs.keys(), timeout=90):
-            ch = futs[f]
-            try:
-                ok = bool(f.result())
-            except Exception:
-                ok = False
-            if ok:
-                alive.append(ch)
-            brain.record(urlparse(ch['url']).netloc, ok)
-    except Exception:
-        pass
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
-    return alive
-
-def health_sweep():
-    with cache_lock:
-        snapshot = list(alive_list)
-    if not snapshot or is_updating:
-        return
-    logger.info(f"🩺 Проверка здоровья: {len(snapshot)} каналов...")
-    survivors = []
-    dead = 0
-    ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
-    futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT): ch for ch in snapshot}
-    try:
-        for f in as_completed(futs.keys(), timeout=600):
-            ch = futs[f]
-            try:
-                ok = bool(f.result())
-            except Exception:
-                ok = False
-            if ok:
-                survivors.append(ch)
-                DEAD_STRIKES.pop(ch['url'], None)
-            else:
-                n = DEAD_STRIKES.get(ch['url'], 0) + 1
-                if n >= DEAD_LIMIT:
-                    dead += 1
-                else:
-                    DEAD_STRIKES[ch['url']] = n
-                    survivors.append(ch)
-            brain.record(ch.get('host', urlparse(ch['url']).netloc), ok)
-    except TimeoutError:
-        logger.warning("⏳ Таймаут проверки здоровья")
-    except Exception as e:
-        logger.error(f"Ошибка проверки здоровья: {e}")
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
-    if dead and survivors:
-        flush_playlist(survivors, replace=True)
-    with cache_lock:
-        stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        stats['sweep_removed'] = dead
-    logger.info(f"🩺 Итог: живо {len(survivors)}, умерло {dead}")
-
-def sweep_worker():
-    while True:
-        time.sleep(SWEEP_EVERY)
-        try:
-            health_sweep()
-        except Exception as e:
-            logger.exception(f"🩺 Ошибка свипа: {e}")
-
-def update_cache():
-    global playlist_cache, is_updating
-    if is_updating:
-        return
-    is_updating = True
-    start = time.time()
-    logger.info("🔄 v" + VERSION + " Старт: комитет нейросетей + разведка...")
-    try:
-        api_channels, train_pairs, geo_pairs = fetch_iptv_org_api()
-        geo_net.train(geo_pairs, epochs=3, lr=0.1)
-        with cache_lock:
-            stats['geo_pairs'] = len(geo_pairs)
-        logger.info(f"🌍 Дипломат обучен на {len(geo_pairs)} примерах")
-        with cache_lock:
-            alive = list(alive_list)
-        alive_urls = set(ch['url'] for ch in alive)
-        alive_names = set(norm_name(ch['name']) for ch in alive)
-        for ch in quick_seed():
-            if ch['url'] not in alive_urls:
-                nk = norm_name(ch['name'])
-                if nk in alive_names:
-                    continue
-                alive_names.add(nk)
-                alive_urls.add(ch['url'])
-                alive.append(ch)
-        if alive:
-            flush_playlist(alive)
-        entries = {}
-        seen = set()
-        reasons = Counter()
-        logger.info(f"API iptv-org: потоков РФ/СНГ: {len(api_channels)}, "
-                    f"точных меток для Ирочки: {len(train_pairs)}")
-        for ach in api_channels:
-            name = ach['name']
-            if not name:
-                continue
-            reason = reject_reason(name, ach['url'])
-            if reason:
-                reasons[reason] += 1
-                continue
-            url = ach['url']
-            if url in seen:
-                continue
-            seen.add(url)
-            cat = api_category(ach.get('cats')) or get_category(name)
-            inf = '#EXTINF:-1'
-            if ach.get('cid'):
-                inf += ' tvg-id="' + ach['cid'] + '"'
-            if ach.get('logo'):
-                inf += ' tvg-logo="' + ach['logo'] + '"'
-            inf += ' group-title="' + cat + '",' + name
-            key = norm_name(name)
-            new_ch = {'inf': inf, 'url': url, 'cat': cat, 'name': name, 'ua': ach['ua'], 'ref': ach['ref']}
-            if key in entries:
-                if is_hd(name) and not is_hd(entries[key]['name']):
-                    entries[key] = new_ch
-            else:
-                entries[key] = new_ch
-        regions = fetch_ru_regions()
-        if not regions:
-            regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u' for r in FALLBACK_REGIONS]
-        base = list(set(STATIC_SOURCES + regions))
-        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab()
-                         + fetch_bitbucket() + fetch_gitea_family()
-                         + fetch_web_search() + fetch_telegram()) - set(base))
-        sources = base + extra[:MAX_EXTRA_SOURCES]
-        logger.info(f"ВСЕГО источников: {len(sources)}")
-        loaded = 0
-        ex = ThreadPoolExecutor(max_workers=SOURCE_WORKERS)
-        futs = [ex.submit(fetch_source_text, u) for u in sources]
-        try:
-            for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
-                try:
-                    txt = f.result()
-                except Exception:
-                    txt = None
-                if txt:
-                    loaded += 1
-                    parse_m3u(txt, entries, seen, reasons)
-        except TimeoutError:
-            logger.warning(f"⏳ Таймаут фазы источников ({SOURCE_PHASE_MAX}с), успело: {loaded}")
-        except Exception as e:
-            logger.error(f"Ошибка фазы источников: {e}")
-        finally:
-            try:
-                ex.shutdown(wait=False, cancel_futures=True)
-            except TypeError:
-                ex.shutdown(wait=False)
-        logger.info(f"Загружено и распарсено плейлистов: {loaded}")
-        logger.info(f"Фильтры вырез
+    'spas', '
