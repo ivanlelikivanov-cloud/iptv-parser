@@ -20,7 +20,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-VERSION = '3.0'
+VERSION = '3.1'
 
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
@@ -166,6 +166,8 @@ MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
 NET_P_MIN = 0.45
 NET_MARGIN = 0.12
+GEO_P_MIN = 0.6
+GEO_MARGIN = 0.2
 HOST_REP_MIN = 0.15
 HOST_REP_CNT = 10
 
@@ -210,6 +212,7 @@ stats = {
     "alive_channels": 0, "filtered": {}, "categories": {},
     "ml_samples": 0, "ml_accuracy": 0.0, "ml_on": True, "nb_moved": 0,
     "last_sweep": None, "sweep_removed": 0, "host_blacklisted": 0,
+    "geo_pairs": 0, "geo_rejected": 0,
 }
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -219,7 +222,6 @@ HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
 GOOD_CT = ('video/', 'audio/', 'octet-stream', 'mp2t')
 
-# 🕶 Вежливый сбор: ротация UA, паузы, лимит 2 потока на сайт — чтобы нас не блокировали
 UA_POOL = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
     'Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0',
@@ -238,8 +240,7 @@ def host_sem(host):
         return s
 
 def polite_headers():
-    h = {'User-Agent': random.choice(UA_POOL), 'Accept': '*/*'}
-    return h
+    return {'User-Agent': random.choice(UA_POOL), 'Accept': '*/*'}
 
 BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'forbidden', 'captcha', 'cloudflare', 'access denied',
@@ -268,6 +269,7 @@ def _sig(z):
     ez = math.exp(z)
     return ez / (1.0 + ez)
 
+# ==================== 🛡 СМОТРИТЕЛЬ: долгоживучесть потоков ====================
 class TinyLR:
     def __init__(self, n=12):
         self.w = [0.0] * n
@@ -283,10 +285,7 @@ class TinyLR:
                     self.w[i] = self.w[i] * (1.0 - l2) - lr * e * xi
                 self.b -= lr * e
 
-# ==================== 🧠 ИРОЧКА v3: умная нейросеть категорий ====================
-# Софтмакс-перцептрон (хэширование признаков: слова + биграммы + триграммы).
-# Учится на точных метках iptv-org (все языки) + на русских ключевых словах,
-# поэтому понимает и иностранные названия, и русские города.
+# ==================== БАЗОВАЯ СЕТЬ (софтмакс, хэш-признаки) ====================
 class CategoryNet:
     def __init__(self, dim=4096):
         self.dim = dim
@@ -350,7 +349,10 @@ class CategoryNet:
                     for h in x:
                         Wc[h] = Wc.get(h, 0.0) - lr * g
 
+# 🧠 Ирочка — категории
 cat_net = CategoryNet()
+# 🌍 Дипломат — своё/чужое (СНГ vs остальные)
+geo_net = CategoryNet(dim=2048)
 
 def apply_net(ch_list):
     moved = 0
@@ -795,30 +797,35 @@ def fetch_telegram():
     return list(found)
 
 def fetch_iptv_org_api():
+    """Возвращает (потоки РФ/СНГ, пары для Ирочки, пары для Дипломата)"""
     try:
         sess = get_session()
         ch_r = sess.get("https://iptv-org.github.io/api/channels.json", timeout=(10, 60), headers=HEADERS_WEB)
         st_r = sess.get("https://iptv-org.github.io/api/streams.json", timeout=(10, 60), headers=HEADERS_WEB)
         if ch_r.status_code != 200 or st_r.status_code != 200:
-            return [], []
+            return [], [], []
         names = {}
         meta = {}
         train_pairs = []
+        geo_pairs = []
         for ch in ch_r.json():
             if ch.get('is_nsfw'):
-                continue
-            if ch.get('country') == 'UA':
                 continue
             if ch.get('category') == 'radio':
                 continue
             name = ch.get('name', '')
+            country = ch.get('country') or ''
+            if name and len(name) >= 3:
+                geo_pairs.append((name, 'CIS' if country in CIS_COUNTRIES else 'OTHER'))
+            if ch.get('country') == 'UA':
+                continue
             cat = api_category(ch.get('categories') or [])
             if name and cat:
                 train_pairs.append((name, cat))
             langs = []
             for lng in (ch.get('languages') or []):
                 langs.append(lng.get('code') if isinstance(lng, dict) else lng)
-            if ch.get('country') in CIS_COUNTRIES or 'rus' in langs:
+            if country in CIS_COUNTRIES or 'rus' in langs:
                 names[ch.get('id')] = name
                 meta[ch.get('id')] = {
                     'logo': ch.get('logo') or '',
@@ -836,10 +843,10 @@ def fetch_iptv_org_api():
                     'logo': m.get('logo', ''), 'cid': m.get('cid', ''),
                     'ua': s.get('user_agent') or '', 'ref': s.get('http_referrer') or '',
                 })
-        return result, train_pairs
+        return result, train_pairs, geo_pairs
     except Exception as e:
         logger.error(f"Ошибка API iptv-org: {e}")
-        return [], []
+        return [], [], []
 
 def fetch_source_text(url):
     host = urlparse(url).netloc
@@ -889,7 +896,11 @@ def is_radio(name):
     n = name.lower()
     return any(w in n for w in RADIO_WORDS) or bool(re.search(r'\bfm\b', n)) or 'радиостанция' in n
 def is_russian_like(name):
+    # 🌍 Дипломат: кириллица — ещё не гарантия; уверенных иностранцев отсеваем
     if re.search(r'[\u0400-\u04FF]', name):
+        pred, p1, p2 = geo_net.predict(name)
+        if pred == 'OTHER' and p1 >= GEO_P_MIN and (p1 - p2) >= GEO_MARGIN:
+            return False
         return True
     n = name.lower()
     return any(w in n for w in LATIN_RU_WORDS)
@@ -1286,8 +1297,15 @@ def update_cache():
         return
     is_updating = True
     start = time.time()
-    logger.info("🔄 v" + VERSION + " Старт: разведка + накопление...")
+    logger.info("🔄 v" + VERSION + " Старт: комитет нейросетей + разведка...")
     try:
+        api_channels, train_pairs, geo_pairs = fetch_iptv_org_api()
+        # 🌍 Дипломат учится первым — до фильтрации
+        geo_net.train(geo_pairs, epochs=3, lr=0.1)
+        with cache_lock:
+            stats['geo_pairs'] = len(geo_pairs)
+        logger.info(f"🌍 Дипломат обучен на {len(geo_pairs)} примерах")
+
         with cache_lock:
             alive = list(alive_list)
         alive_urls = set(ch['url'] for ch in alive)
@@ -1305,7 +1323,6 @@ def update_cache():
         entries = {}
         seen = set()
         reasons = Counter()
-        api_channels, train_pairs = fetch_iptv_org_api()
         logger.info(f"API iptv-org: потоков РФ/СНГ: {len(api_channels)}, "
                     f"точных меток для Ирочки: {len(train_pairs)}")
         for ach in api_channels:
@@ -1368,16 +1385,15 @@ def update_cache():
         logger.info(f"Фильтры вырезали: {dict(reasons)}")
         with cache_lock:
             stats['filtered'] = dict(reasons)
-        # 🧠 Ирочка v3: учим на точных метках iptv-org + уверенных русских ключевых словах
+        # 🧠 Ирочка учится и наводит порядок
         kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values()
-                    if ch['cat'] not in ('Общие',)]
+                    if ch['cat'] != 'Общие']
         cat_net.train(train_pairs + kw_pairs)
         moved = apply_net(list(entries.values()))
         with cache_lock:
             stats['nb_moved'] = moved
-        logger.info(f"🧠 Ирочка v3 распределила из «Общих»: {moved} каналов")
+        logger.info(f"🧠 Ирочка распределила из «Общих»: {moved} каналов")
         raw = list(entries.values())
-        # 🚫 Репутационный блэклист: хосты-мертвецы (Wink и т.п.) не проходят
         skipped = 0
         kept = []
         for ch in raw:
@@ -1390,7 +1406,7 @@ def update_cache():
         with cache_lock:
             stats['host_blacklisted'] = skipped
         if skipped:
-            logger.info(f"🚫 Репутация хостов: отсечено {skipped} каналов с мёртвых хостов")
+            logger.info(f"🚫 Смотритель отсёк {skipped} каналов с мёртвых хостов")
         for ch in raw:
             ch['feats'] = extract_features(ch)
             ch['host'] = urlparse(ch['url']).netloc
@@ -1477,7 +1493,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v3</title>
+<title>IPTV Russia Pro MAX v3.1</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1491,8 +1507,8 @@ h1{margin:0 0 8px;font-size:32px}
 .stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v3</h1>
-<div class="sub">Ирочка v3 • EPG + логотипы • вежливый сбор • репутация хостов</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v3.1</h1>
+<div class="sub">Комитет из 3 нейросетей: 🧠 Ирочка (категории) •  Дипломат (своё/чужое) • 🛡 Смотритель (качество)</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист (основной)</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 Плейлист (PROXY)</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
