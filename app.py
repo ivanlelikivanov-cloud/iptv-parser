@@ -19,7 +19,7 @@ from flask import Flask, Response, jsonify, request
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-VERSION = '4.4'
+VERSION = '4.5'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -57,10 +57,10 @@ MAX_CHANNELS = 20000
 MAX_EXTRA_SOURCES = 600
 MAX_CHECK_POOL = 12000
 SOURCE_WORKERS = 12
-CHECK_WORKERS = 50
+CHECK_WORKERS = 60
 CHECK_TIMEOUT = 40.0
 SEED_TIMEOUT = 8.0
-SOURCE_PHASE_MAX = 420
+SOURCE_PHASE_MAX = 480
 CHECK_PHASE_MAX = 1800
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
@@ -75,8 +75,6 @@ MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
 NET_P_MIN = 0.40
 NET_MARGIN = 0.10
-GEO_P_MIN = 0.6
-GEO_MARGIN = 0.2
 HOST_REP_MIN = 0.15
 HOST_REP_CNT = 10
 SCORE_MODEL_P, SCORE_MODEL_REP, SCORE_MODEL_HEUR = 0.5, 0.35, 0.15
@@ -84,7 +82,6 @@ SCORE_NOMODEL_REP, SCORE_NOMODEL_HEUR, SCORE_NOMODEL_CNT = 0.55, 0.25, 0.2
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 
-# Надёжные источники: лайт-чек и сразу в плейлист
 TRUSTED_HOSTS = {'iptv-org.github.io', 'raw.githubusercontent.com', 'new.m3u.su',
                  'm3u.su', 'webarmen.com', 'smolnp.github.io', 'iptv-list.mart.ru'}
 
@@ -681,10 +678,8 @@ def is_paywall(name):
     n = name.lower()
     return any(w in n for w in PAYWALL_WORDS) or any(w.lower() in n for w in BLACKLIST_WORDS)
 def is_russian_like(name):
+    # v4.5: кириллица = принимаем (как в первом коде); Дипломат больше не вырезает
     if re.search(r'[\u0400-\u04FF]', name):
-        pred, p1, p2 = geo_net.predict(name)
-        if pred == 'OTHER' and p1 >= GEO_P_MIN and (p1 - p2) >= GEO_MARGIN:
-            return False
         return True
     n = name.lower()
     return any(w in n for w in LATIN_RU_WORDS)
@@ -751,7 +746,6 @@ def _first_media_uri(text, base):
         return s if s.startswith('http') else base + s
     return None
 
-# ⚡ Лайт-чек для надёжных источников: быстро и без глубокой пробы
 def check_fast(ch):
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -790,8 +784,6 @@ def check_fast(ch):
     except Exception:
         return 'blocked'
 
-# alive = играет; blocked = Европа не пускает, но в РФ играет (не удаляем);
-# dead = 404/пусто/мусор (удаляется после 3 страйков)
 def check_one(ch, limit=None):
     if urlparse(ch['url']).netloc in TRUSTED_HOSTS:
         return check_fast(ch)
@@ -1340,7 +1332,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v4.4</title>
+<title>IPTV Russia Pro MAX v4.5</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1352,8 +1344,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v4.4</h1>
-<div class="sub">⚡ лайт-чек надёжных • 🧠 Ирочка • 🌍 Дипломат • 🛡 Смотритель • 📻 Радио</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v4.5</h1>
+<div class="sub">⚡ лайт-чек • 🧠 Ирочка • 📻 Радио • EPG+лого • объём как в первом</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
