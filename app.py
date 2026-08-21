@@ -19,7 +19,7 @@ from flask import Flask, Response, jsonify, request
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-VERSION = '4.2'
+VERSION = '4.4'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -57,11 +57,11 @@ MAX_CHANNELS = 20000
 MAX_EXTRA_SOURCES = 600
 MAX_CHECK_POOL = 12000
 SOURCE_WORKERS = 12
-CHECK_WORKERS = 40
+CHECK_WORKERS = 50
 CHECK_TIMEOUT = 40.0
 SEED_TIMEOUT = 8.0
 SOURCE_PHASE_MAX = 420
-CHECK_PHASE_MAX = 1500
+CHECK_PHASE_MAX = 1800
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
 FLUSH_EVERY = 10
@@ -83,6 +83,10 @@ SCORE_MODEL_P, SCORE_MODEL_REP, SCORE_MODEL_HEUR = 0.5, 0.35, 0.15
 SCORE_NOMODEL_REP, SCORE_NOMODEL_HEUR, SCORE_NOMODEL_CNT = 0.55, 0.25, 0.2
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
+
+# Надёжные источники: лайт-чек и сразу в плейлист
+TRUSTED_HOSTS = {'iptv-org.github.io', 'raw.githubusercontent.com', 'new.m3u.su',
+                 'm3u.su', 'webarmen.com', 'smolnp.github.io', 'iptv-list.mart.ru'}
 
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
              'Музыка', 'Познавательные', 'Развлекательные', 'Региональные',
@@ -747,11 +751,50 @@ def _first_media_uri(text, base):
         return s if s.startswith('http') else base + s
     return None
 
-# ==================== ПРОВЕРКА: alive / blocked / dead ====================
-# alive   — реально отдаёт видео с сервера
-# blocked — Европа не пускает (403/таймаут), но в РФ обычно играет: НЕ удаляем
-# dead    — 404/пусто/HTML-мусор: только это копим в страйках и удаляем
+# ⚡ Лайт-чек для надёжных источников: быстро и без глубокой пробы
+def check_fast(ch):
+    url = ch['url']
+    headers = dict(HEADERS_PLAYER)
+    if ch.get('ua'):
+        headers['User-Agent'] = ch['ua']
+    if ch.get('ref'):
+        headers['Referer'] = ch['ref']
+    session = get_session()
+    try:
+        r = session.head(url, timeout=8, headers=headers, allow_redirects=True, verify=False)
+        if r.status_code < 400:
+            ct = r.headers.get('content-type', '').lower()
+            if any(g in ct for g in GOOD_CT) and 'mpegurl' not in ct:
+                return 'alive'
+    except Exception:
+        pass
+    try:
+        r = session.get(url, timeout=8, headers=headers, stream=True, allow_redirects=True, verify=False)
+        if r.status_code in (401, 403, 451):
+            return 'blocked'
+        if r.status_code >= 400:
+            return 'dead'
+        ct = r.headers.get('content-type', '').lower()
+        chunk = next(r.iter_content(chunk_size=2048), b'')
+        r.close()
+        if not chunk:
+            return 'dead'
+        if any(g in ct for g in GOOD_CT) or chunk[:1] == b'\x47' or chunk[:7] == b'#EXTM3U':
+            return 'alive'
+        low = chunk[:300].lower()
+        if any(m in low for m in BLOCK_MARKERS):
+            return 'blocked'
+        if b'<html' in low or b'<!doctype' in low:
+            return 'dead'
+        return 'alive'
+    except Exception:
+        return 'blocked'
+
+# alive = играет; blocked = Европа не пускает, но в РФ играет (не удаляем);
+# dead = 404/пусто/мусор (удаляется после 3 страйков)
 def check_one(ch, limit=None):
+    if urlparse(ch['url']).netloc in TRUSTED_HOSTS:
+        return check_fast(ch)
     lim = limit or CHECK_TIMEOUT
     url = ch['url']
     headers = dict(HEADERS_PLAYER)
@@ -1054,8 +1097,8 @@ def health_sweep():
     if not snapshot or is_updating:
         return
     logger.info(f"🩺 Проверка здоровья: {len(snapshot)} каналов...")
-    survivors = []
-    dead = 0
+    dead_urls = set()
+    processed = 0
     ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
     futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT): ch for ch in snapshot}
     try:
@@ -1065,19 +1108,18 @@ def health_sweep():
                 res = f.result()
             except Exception:
                 res = 'dead'
+            processed += 1
             if is_ok(res):
-                survivors.append(ch)
                 DEAD_STRIKES.pop(ch['url'], None)
             else:
                 n = DEAD_STRIKES.get(ch['url'], 0) + 1
                 if n >= DEAD_LIMIT:
-                    dead += 1
+                    dead_urls.add(ch['url'])
                 else:
                     DEAD_STRIKES[ch['url']] = n
-                    survivors.append(ch)
             brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
     except TimeoutError:
-        logger.warning("⏳ Таймаут проверки здоровья")
+        logger.warning("⏳ Таймаут свипа: часть не успела — они остаются как есть")
     except Exception as e:
         logger.error(f"Ошибка проверки здоровья: {e}")
     finally:
@@ -1085,12 +1127,14 @@ def health_sweep():
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
+    survivors = [ch for ch in snapshot if ch['url'] not in dead_urls]
+    dead = len(dead_urls)
     if dead and survivors:
         flush_playlist(survivors, replace=True)
     with cache_lock:
         stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
         stats['sweep_removed'] = dead
-    logger.info(f"🩺 Итог: живо {len(survivors)}, умерло {dead}")
+    logger.info(f"🩺 Итог: проверено {processed}/{len(snapshot)}, удалено {dead}, осталось {len(survivors)}")
 
 def sweep_worker():
     while True:
@@ -1296,7 +1340,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v4.2</title>
+<title>IPTV Russia Pro MAX v4.4</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1308,8 +1352,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v4.2</h1>
-<div class="sub">🧠 Ирочка • 🌍 Дипломат • 🛡 Смотритель • 📻 Радио • EPG+лого</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v4.4</h1>
+<div class="sub">⚡ лайт-чек надёжных • 🧠 Ирочка • 🌍 Дипломат • 🛡 Смотритель • 📻 Радио</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
