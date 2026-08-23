@@ -19,7 +19,7 @@ from flask import Flask, Response, jsonify, request
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-VERSION = '5.0'
+VERSION = '5.1'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -27,31 +27,124 @@ DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
 MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.json')
 SOURCES_FILE = os.path.join(BASE_DIR, 'sources.json')
 
-def _load_sources():
-    d = {
-        "static": ["https://iptv-org.github.io/iptv/countries/ru.m3u",
-                   "https://iptv-org.github.io/iptv/languages/rus.m3u",
-                   "https://iptv-org.github.io/iptv/index.m3u"],
-        "html": ["https://m3u.su/", "https://new.m3u.su/"],
-        "regions_fallback": [], "github_queries": [], "gh_paths": [],
-        "probe_paths": [], "web_queries": [], "tg_channels": [],
-    }
-    try:
-        with open(SOURCES_FILE, encoding='utf-8') as f:
-            d.update(json.load(f))
-        msg = f"📚 sources.json: {len(d['static'])} источников"
-    except Exception:
-        msg = "⚠️ sources.json не найден — встроенный минимум"
-    return d, msg
+# ==================== ИСТОЧНИКИ (вшиты в код, sources.json добавляет сверху) =====
+STATIC_SOURCES = [
+    "https://iptv-org.github.io/iptv/index.m3u",
+    "https://iptv-org.github.io/iptv/countries/ru.m3u",
+    "https://iptv-org.github.io/iptv/countries/by.m3u",
+    "https://iptv-org.github.io/iptv/countries/kz.m3u",
+    "https://iptv-org.github.io/iptv/countries/kg.m3u",
+    "https://iptv-org.github.io/iptv/countries/uz.m3u",
+    "https://iptv-org.github.io/iptv/countries/am.m3u",
+    "https://iptv-org.github.io/iptv/countries/az.m3u",
+    "https://iptv-org.github.io/iptv/countries/ge.m3u",
+    "https://iptv-org.github.io/iptv/countries/md.m3u",
+    "https://iptv-org.github.io/iptv/countries/tj.m3u",
+    "https://iptv-org.github.io/iptv/countries/tm.m3u",
+    "https://iptv-org.github.io/iptv/countries/il.m3u",
+    "https://iptv-org.github.io/iptv/languages/rus.m3u",
+    "https://iptv-org.github.io/iptv/languages/bel.m3u",
+    "https://iptv-org.github.io/iptv/languages/kaz.m3u",
+    "https://iptv-org.github.io/iptv/languages/uzb.m3u",
+    "https://iptv-org.github.io/iptv/languages/kir.m3u",
+    "https://iptv-org.github.io/iptv/languages/tgk.m3u",
+    "https://iptv-org.github.io/iptv/languages/arm.m3u",
+    "https://iptv-org.github.io/iptv/languages/aze.m3u",
+    "https://iptv-org.github.io/iptv/languages/tat.m3u",
+    "https://iptv-org.github.io/iptv/languages/che.m3u",
+    "https://iptv-org.github.io/iptv/languages/bak.m3u",
+    "https://iptv-org.github.io/iptv/languages/chv.m3u",
+    "https://iptv-org.github.io/iptv/languages/udm.m3u",
+    "https://iptv-org.github.io/iptv/languages/sah.m3u",
+    "https://iptv-org.github.io/iptv/languages/kat.m3u",
+    "https://iptv-org.github.io/iptv/languages/heb.m3u",
+    "https://iptv-org.github.io/iptv/categories/news.m3u",
+    "https://iptv-org.github.io/iptv/categories/movies.m3u",
+    "https://iptv-org.github.io/iptv/categories/sports.m3u",
+    "https://iptv-org.github.io/iptv/categories/kids.m3u",
+    "https://iptv-org.github.io/iptv/categories/music.m3u",
+    "https://iptv-org.github.io/iptv/categories/documentary.m3u",
+    "https://iptv-org.github.io/iptv/categories/entertainment.m3u",
+    "https://iptv-org.github.io/iptv/categories/family.m3u",
+    "https://iptv-org.github.io/iptv/categories/culture.m3u",
+    "https://iptv-org.github.io/iptv/categories/education.m3u",
+    "https://iptv-org.github.io/iptv/categories/comedy.m3u",
+    "https://iptv-org.github.io/iptv/categories/series.m3u",
+    "https://iptv-org.github.io/iptv/categories/animation.m3u",
+    "https://iptv-org.github.io/iptv/categories/religious.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/index.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
+    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
+    "https://raw.githubusercontent.com/Free-iptv/iptv/master/channels/ru.m3u",
+    "https://raw.githubusercontent.com/4mirror/iptv/master/ru.m3u",
+    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
+    "https://raw.githubusercontent.com/smolnp/IPTVru/main/IPTVru.m3u",
+    "https://smolnp.github.io/IPTVru/IPTVru.m3u",
+    "https://raw.githubusercontent.com/hmlendea/iptv-playlist-aggregator/master/output/playlist.m3u",
+    "https://raw.githubusercontent.com/VladAlex1975/IPTV/main/IPTV.m3u",
+    "https://raw.githubusercontent.com/EdWeber/iptv/master/iptv.m3u",
+    "https://raw.githubusercontent.com/LaneSh4d0w/IPTV_Russia/master/iptv.m3u",
+    "https://raw.githubusercontent.com/zhenyafedorov/iptv/main/iptv.m3u",
+    "https://raw.githubusercontent.com/SamantazFox/IPTV-RU/master/iptv.m3u",
+    "http://iptv-list.mart.ru/playlist.m3u",
+    "https://m3u.su/m3u/sng.m3u",
+    "https://m3u.su/m3u/ru.m3u",
+    "https://webarmen.com/my/iptv/auto.nogeo.m3u",
+    "https://webarmen.com/my/iptv/auto.m3u",
+    "https://new.m3u.su/rusm",
+    "https://new.m3u.su/so",
+    "https://new.m3u.su/runtv",
+    "https://new.m3u.su/rurt",
+    "https://new.m3u.su/rut",
+    "https://new.m3u.su/ruz",
+    "https://new.m3u.su/lgu",
+    "https://new.m3u.su/lgn",
+    "https://new.m3u.su/tvoe",
+    "https://new.m3u.su/h",
+    "https://new.m3u.su/mult",
+]
 
-CFG, CFG_MSG = _load_sources()
-STATIC_SOURCES = CFG['static']
-HTML_SOURCES = CFG['html']
-FALLBACK_REGIONS = CFG['regions_fallback']
-GITHUB_QUERIES = CFG['github_queries']
-GH_COMMON_PATHS = CFG['gh_paths']
-PROBE_PATHS = CFG['probe_paths']
-TG_CHANNELS = CFG['tg_channels']
+HTML_SOURCES = [
+    "https://m3u.su/", "https://m3u.su/m3u/", "https://new.m3u.su/",
+    "https://sat-portal.com/plejlisty/", "https://6x6.msk.ru/", "https://homtv.ru/",
+    "https://iptv-rus.com/", "https://iptv-rus.com/playlists/",
+    "https://pikniktv.info/viewforum.php?f=328", "https://webarmen.com/my/iptv/",
+    "https://go2tv.top/", "https://iptv.one/", "https://iptv.best/",
+    "https://iptv-channels.net/", "https://iptv-live.ru/", "https://iptv-tv.ru/",
+    "https://iptv-russia.online/", "https://vse-tv.net/", "https://vse-tv.net/playlists.html",
+    "https://forumtv.org/", "https://onlinetv.ru/", "https://smotret-tv.online/",
+    "https://pskovline.tv/tvm3u.php", "https://github.com/iptv-org/iptv",
+    "https://github.com/Free-iptv/iptv", "https://github.com/4mirror/iptv",
+    "https://github.com/hmlendea/iptv-playlist-aggregator",
+]
+
+GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'iptv russian', 'm3u ru', 'm3u russia',
+                  'iptv playlist ru', 'topic:iptv ru', 'iptv m3u8 ru', 'iptv снг', 'iptv cis']
+GH_COMMON_PATHS = ['ru.m3u', 'russia.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u', 'index.m3u',
+                   'playlist.m3u', 'channels/ru.m3u', 'playlist.m3u8', 'ru.m3u8',
+                   'output/playlist.m3u']
+PROBE_PATHS = ['ru.m3u', 'russia.m3u', 'playlist.m3u', 'iptv.m3u', 'tv.m3u', 'index.m3u', 'main.m3u']
+WEB_QUERIES = ['iptv m3u ru бесплатно', 'плейлист iptv m3u россия 2026',
+               'iptv playlist m3u8 russia free', 'iptv m3u8 ru бесплатно скачать',
+               'site:t.me iptv m3u', 'iptv плейлист форум бесплатно',
+               'm3u плейлист тв бесплатно', 'агрегатор iptv плейлистов', 'iptv m3u снг бесплатно']
+TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru',
+               'iptv_playlist', 'm3u_playlist', 'iptvfree', 'tv_playlist', 'iptv_rf',
+               'playlist_iptv', 'iptv_su', 'free_iptv_ru', 'iptv_list', 'ru_iptv',
+               'iptv_tv_ru', 'russia_iptv', 'iptv_2026', 'm3u8ru', 'iptv_playlist_ru',
+               'tv_m3u', 'iptvhub_ru', 'iptv_rf_ru', 'free_tv_ru', 'iptv_m3u8', 'tv_channels_ru']
+
+CFG_MSG = "📚 источники вшиты в код"
+try:
+    with open(SOURCES_FILE, encoding='utf-8') as f:
+        _d = json.load(f)
+    STATIC_SOURCES += _d.get('static', [])
+    HTML_SOURCES += _d.get('html', [])
+    TG_CHANNELS += _d.get('tg_channels', [])
+    CFG_MSG = f"📚 sources.json добавил: {len(_d.get('static', []))} static"
+except Exception:
+    pass
 
 MAX_CHANNELS = 20000
 MAX_EXTRA_SOURCES = 600
@@ -70,10 +163,10 @@ KEEPALIVE_SEC = 60
 SWEEP_EVERY = 21600
 SWEEP_TIMEOUT = 15.0
 SWEEP_WORKERS = 30
-DEAD_LIMIT = 100000  # v5.0: свип НЕ удаляет каналы, только логи
+DEAD_LIMIT = 100000
 MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
-NET_P_MIN = 0.60   # v5.0: Ирочка двигает только при высокой уверенности
+NET_P_MIN = 0.60
 NET_MARGIN = 0.25
 HOST_REP_MIN = 0.15
 HOST_REP_CNT = 10
@@ -570,6 +663,112 @@ def fetch_github():
             found.add(base + '/' + path)
     return list(found)
 
+def fetch_gitlab():
+    found = set()
+    try:
+        r = get_session().get('https://gitlab.com/api/v4/projects',
+                              params={'search': 'iptv', 'per_page': 15}, headers=HEADERS_WEB, timeout=(5, 15))
+        if r.status_code == 200:
+            for p in r.json():
+                path = p.get('path_with_namespace')
+                branch = p.get('default_branch') or 'main'
+                if path:
+                    for pth in PROBE_PATHS:
+                        found.add('https://gitlab.com/' + path + '/-/raw/' + branch + '/' + pth)
+    except Exception:
+        pass
+    return list(found)
+
+def fetch_bitbucket():
+    found = set()
+    try:
+        r = get_session().get('https://api.bitbucket.org/2.0/repositories',
+                              params={'q': 'name ~ "iptv"', 'pagelen': 15}, headers=HEADERS_WEB, timeout=(5, 15))
+        if r.status_code == 200:
+            for v in r.json().get('values', []):
+                full = v.get('full_name')
+                branch = (v.get('mainbranch') or {}).get('name') or 'master'
+                if full:
+                    for pth in PROBE_PATHS:
+                        found.add('https://bitbucket.org/' + full + '/raw/' + branch + '/' + pth)
+    except Exception:
+        pass
+    return list(found)
+
+def fetch_gitea_family():
+    found = set()
+    apis = [
+        ('https://codeberg.org/api/v1/repos/search?q=iptv&limit=10', 'https://codeberg.org/', '/raw/branch/'),
+        ('https://gitea.com/api/v1/repos/search?q=iptv&limit=10', 'https://gitea.com/', '/raw/'),
+    ]
+    for url, base, rawfmt in apis:
+        try:
+            r = get_session().get(url, headers=HEADERS_WEB, timeout=(5, 15))
+            if r.status_code == 200:
+                for repo in r.json().get('data', []):
+                    full = repo.get('full_name')
+                    branch = repo.get('default_branch') or 'main'
+                    if full:
+                        for pth in PROBE_PATHS:
+                            found.add(base + full + rawfmt + branch + '/' + pth)
+        except Exception:
+            continue
+    return list(found)
+
+def fetch_web_search():
+    m3u = set()
+    pages = []
+    for q in WEB_QUERIES:
+        try:
+            time.sleep(random.uniform(0.3, 0.8))
+            r = get_session().get('https://html.duckduckgo.com/html/',
+                                  params={'q': q}, headers=polite_headers(), timeout=(5, 15))
+            if r.status_code != 200:
+                continue
+            m3u.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
+            for enc in re.findall(r'uddg=([^&"]+)', r.text):
+                pages.append(unquote(enc))
+        except Exception:
+            continue
+    def scrape(page):
+        try:
+            time.sleep(random.uniform(0.2, 0.6))
+            r = get_session().get(page, headers=polite_headers(), timeout=(5, 10), verify=False, stream=True)
+            if r.status_code == 200:
+                return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I)
+            r.close()
+        except Exception:
+            pass
+        return []
+    ex = ThreadPoolExecutor(max_workers=8)
+    try:
+        for links in ex.map(scrape, pages[:25], timeout=90):
+            m3u.update(links)
+    except Exception:
+        pass
+    finally:
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+    logger.info(f"Веб-поиск: ссылок: {len(m3u)}")
+    return list(m3u)
+
+def fetch_telegram():
+    found = set()
+    for ch in TG_CHANNELS:
+        try:
+            time.sleep(random.uniform(0.2, 0.6))
+            r = get_session().get('https://t.me/s/' + ch, headers=polite_headers(), timeout=(5, 10), stream=True)
+            if r.status_code == 200:
+                found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I))
+            else:
+                r.close()
+        except Exception:
+            continue
+    logger.info(f"Telegram: ссылок: {len(found)}")
+    return list(found)
+
 def fetch_iptv_org_api():
     try:
         sess = get_session()
@@ -642,7 +841,6 @@ UA_WORDS = _clean(['україн', 'украина', 'україна', 'kyiv', '
                    '1+1', '2+2', 'інтер', 'inter ua', 'верес', 'тоніс', 'тонис', 'ua: ',
                    'ua |', '| ua', ' ukraine', 'украинск', '5 kanal', 'надія', 'новий',
                    'перший', 'ранок', 'мова', 'тб', 'нація', 'світ тв', 'люд', 'країна'])
-# v5.0: убрано 'iptv' (съедало нормальные каналы), добавлен 'винк'
 PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
                         'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
                         'магазин', 'shop', 'store', 'premium', 'премиум', 'vip', 'вип',
@@ -662,7 +860,6 @@ LATIN_RU_WORDS = _clean(['rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pe
                          'subbota', 'mir tv', 'otr', 'tv centr', 'tv center', 'telekanal',
                          '360', '8 kanal', 'shanson tv', 'retro tv', 'amedia', 'moscow 24',
                          'moskva 24', 'peterburg', 'petersburg', 'len tv', 'kinopoisk', 'illuzion'])
-# v5.0: 'wink' как подстрока — ловит любые wink-домены
 BAD_URL_WORDS = _clean(['wink', 'okko.tv', 'ivi.ru', 'more.tv', 'kion.ru',
                         'start.ru', 'premier.one', 'geoblock', 'geo-block'])
 JUNK_WORDS = _clean(['webcam', 'камера', 'camera', 'без названия', 'безымянный', 'test channel', 'проверка'])
@@ -1049,7 +1246,6 @@ def quick_seed():
     return alive
 
 def health_sweep():
-    # v5.0: свип только логирует и пишет репутацию, НЕ удаляет каналы
     with cache_lock:
         snapshot = list(alive_list)
     if not snapshot or is_updating:
@@ -1153,7 +1349,8 @@ def update_cache():
         if not regions:
             regions = ['https://iptv-org.github.io/iptv/regions/' + r + '.m3u' for r in FALLBACK_REGIONS]
         base = list(set(STATIC_SOURCES + regions))
-        extra = list(set(fetch_dynamic() + fetch_github()) - set(base))
+        extra = list(set(fetch_dynamic() + fetch_github() + fetch_gitlab() + fetch_bitbucket()
+                         + fetch_gitea_family() + fetch_web_search() + fetch_telegram()) - set(base))
         sources = base + extra[:MAX_EXTRA_SOURCES]
         logger.info(f"ВСЕГО источников: {len(sources)}")
         loaded = 0
@@ -1293,7 +1490,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v5.0</title>
+<title>IPTV Russia Pro MAX v5.1</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1305,8 +1502,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v5.0</h1>
-<div class="sub">🔒 стабильность: каналы не исчезают • Wink вырезан • 📻 Радио</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v5.1</h1>
+<div class="sub">📚 70+ источников в коде • 🔒 каналы не исчезают • 📻 Радио</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
