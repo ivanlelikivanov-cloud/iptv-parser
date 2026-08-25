@@ -19,7 +19,7 @@ from flask import Flask, Response, jsonify, request
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-VERSION = '5.1'
+VERSION = '5.2'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -27,7 +27,6 @@ DB_FILE = os.path.join(BASE_DIR, 'ml_history.db')
 MODEL_FILE = os.path.join(BASE_DIR, 'ml_model.json')
 SOURCES_FILE = os.path.join(BASE_DIR, 'sources.json')
 
-# ==================== ИСТОЧНИКИ (вшиты в код, sources.json добавляет сверху) =====
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/index.m3u",
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
@@ -533,11 +532,15 @@ def load_disk_cache():
                 data = f.read()
             n = data.count('\nhttp')
             if n > 0:
+                # v5.2: при загрузке вычищаем всё, что больше не проходит фильтры
+                cleaned = [ch for ch in _parse_cached(data)
+                           if not reject_reason(ch['name'], ch['url'])]
                 with cache_lock:
                     playlist_cache = data
-                    alive_list = _parse_cached(data)
-                    stats['alive_channels'] = len(alive_list)
-                logger.info(f"💾 Восстановлен плейлист с диска: {len(alive_list)} каналов")
+                    alive_list = cleaned
+                    stats['alive_channels'] = len(cleaned)
+                logger.info(f"💾 Восстановлен плейлист: {len(cleaned)} каналов "
+                            f"(вычищено {n - len(cleaned)})")
     except Exception as e:
         logger.error(f"Дисковый кэш не читается: {e}")
 
@@ -852,14 +855,13 @@ RADIO_WORDS = _clean(['радио', 'radio', 'fm', 'ржд', 'дорожное',
                       'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
                       'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm',
                       'маяк', 'вести fm', 'радио дача', 'хит fm', 'love radio', 'радио мир'])
-LATIN_RU_WORDS = _clean(['rt ', 'rt.', 'rt doc', 'rtr', 'planeta', 'pervyi', 'pervy',
-                         'channel one', 'match tv', 'match!', 'zvezda', 'karusel', 'carousel',
-                         'muz-tv', 'muz tv', 'ru.tv', 'rutv', 'tv1000', 'tv 1000', 'ren tv',
-                         'ntv', 'sts', 'tnt', 'rossiya', 'rossia', 'russia', 'vesti',
-                         'izvestia', 'kultura', 'soyuz', 'spas', 'domashniy', 'pyatnitsa',
-                         'subbota', 'mir tv', 'otr', 'tv centr', 'tv center', 'telekanal',
-                         '360', '8 kanal', 'shanson tv', 'retro tv', 'amedia', 'moscow 24',
-                         'moskva 24', 'peterburg', 'petersburg', 'len tv', 'kinopoisk', 'illuzion'])
+# v5.2: латиница — только по границам слов, без ложных срабатываний
+LATIN_RU_RE = re.compile(
+    r'\b(?:rtr|planeta|pervyi|pervy|channel one|match tv|zvezda|karusel|carousel|'
+    r'muz-tv|muz tv|ru\.tv|rutv|tv1000|ren tv|ntv|sts|tnt|rossiya|rossia|russia|'
+    r'vesti|izvestia|kultura|soyuz|spas|domashniy|pyatnitsa|subbota|mir tv|otr|'
+    r'tv centr|tv center|telekanal|shanson tv|retro tv|amedia|moscow 24|moskva 24|'
+    r'peterburg|petersburg|len tv|kinopoisk|illuzion|rt)\b', re.I)
 BAD_URL_WORDS = _clean(['wink', 'okko.tv', 'ivi.ru', 'more.tv', 'kion.ru',
                         'start.ru', 'premier.one', 'geoblock', 'geo-block'])
 JUNK_WORDS = _clean(['webcam', 'камера', 'camera', 'без названия', 'безымянный', 'test channel', 'проверка'])
@@ -880,8 +882,7 @@ def is_paywall(name):
 def is_russian_like(name):
     if re.search(r'[\u0400-\u04FF]', name):
         return True
-    n = name.lower()
-    return any(w in n for w in LATIN_RU_WORDS)
+    return bool(LATIN_RU_RE.search(name))
 def is_bad_url(url):
     u = url.lower()
     return any(w in u for w in BAD_URL_WORDS)
@@ -1490,7 +1491,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v5.1</title>
+<title>IPTV Russia Pro MAX v5.2</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1502,8 +1503,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v5.1</h1>
-<div class="sub">📚 70+ источников в коде • 🔒 каналы не исчезают • 📻 Радио</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v5.2</h1>
+<div class="sub">🧹 авто-очистка кэша • 🎯 точный фильтр языков • 📻 Радио</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
