@@ -133,6 +133,14 @@ TG_CHANNELS = ['iptvru', 'iptv_russia', 'russian_iptv', 'iptv_m3u', 'freeiptv_ru
                'playlist_iptv', 'iptv_su', 'free_iptv_ru', 'iptv_list', 'ru_iptv',
                'iptv_tv_ru', 'russia_iptv', 'iptv_2026', 'm3u8ru', 'iptv_playlist_ru',
                'tv_m3u', 'iptvhub_ru', 'iptv_rf_ru', 'free_tv_ru', 'iptv_m3u8', 'tv_channels_ru']
+FALLBACK_REGIONS = [
+    "ru-kgd", "ru-mow", "ru-mos", "ru-spe", "ru-len", "ru-kda", "ru-ros",
+    "ru-vgg", "ru-sta", "ru-da", "ru-sam", "ru-ud", "ru-ta", "ru-ba",
+    "ru-udm", "ru-per", "ru-sve", "ru-che", "ru-tyu", "ru-oms", "ru-nvs",
+    "ru-tom", "ru-kem", "ru-alt", "ru-kya", "ru-irk", "ru-bu", "ru-sa",
+    "ru-zab", "ru-pri", "ru-kha", "ru-amu", "ru-sak", "ru-mag", "ru-kam",
+    "ru-chu",
+]
 
 CFG_MSG = "📚 источники вшиты в код"
 try:
