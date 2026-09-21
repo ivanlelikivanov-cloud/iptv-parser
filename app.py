@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '5.6'
+VERSION = '5.7'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -132,6 +132,7 @@ except Exception:
     pass
 
 MAX_CHANNELS = 20000
+MAX_ALIVE = 15000
 MAX_EXTRA_SOURCES = 600
 MAX_CHECK_POOL = 12000
 SOURCE_WORKERS = 20
@@ -1008,6 +1009,15 @@ def flush_playlist(alive, elapsed=None, replace=False):
     alive_sorted = sorted(alive, key=sort_key)
     if not alive_sorted:
         return
+    # ✂️ Защита от раздувания памяти: сверх лимита первыми уходят зомби
+    if len(alive_sorted) > MAX_ALIVE:
+        good = [ch for ch in alive_sorted if SWEEP_VERDICT.get(ch['url'], 0) == 0]
+        if len(good) >= MAX_ALIVE:
+            alive_sorted = good[:MAX_ALIVE]
+        else:
+            rest = [ch for ch in alive_sorted if SWEEP_VERDICT.get(ch['url'], 0) != 0]
+            alive_sorted = good + rest[:MAX_ALIVE - len(good)]
+        logger.info(f"✂️ Лимит {MAX_ALIVE}: итог {len(alive_sorted)} каналов")
     cat_counts = Counter(ch['cat'] for ch in alive_sorted)
     lines = [
         '#EXTM3U url-tvg="' + EPG_URLS + '"',
@@ -1155,7 +1165,6 @@ def quick_seed():
             ex.shutdown(wait=False)
     return alive
 
-# 🩺 СВИП v5.6: НИКОГДА не удаляет. Только вердикт для сортировки (зомби тонут на дно).
 def health_sweep():
     with cache_lock:
         snapshot = list(alive_list)
@@ -1408,7 +1417,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v5.6</title>
+<title>IPTV Russia Pro MAX v5.7</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1420,8 +1429,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v5.6</h1>
-<div class="sub">🔒 без удалений навсегда • 🌊 зомби тонут на дно категорий</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v5.7</h1>
+<div class="sub">🔒 без удалений • ✂️ лимит 15k против OOM • 🌊 зомби на дне</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
