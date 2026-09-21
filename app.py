@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '5.5'
+VERSION = '5.6'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -148,7 +148,6 @@ KEEPALIVE_SEC = 60
 SWEEP_EVERY = 21600
 SWEEP_TIMEOUT = 25.0
 SWEEP_WORKERS = 30
-DEAD_LIMIT = 100000
 MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
 NET_P_MIN = 0.60
@@ -191,7 +190,7 @@ def api_category(cats):
 
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro — идёт первая проверка каналов...\n"
 alive_list = []
-DEAD_STRIKES = {}
+SWEEP_VERDICT = {}
 cache_lock = threading.Lock()
 is_updating = False
 stats = {
@@ -199,7 +198,7 @@ stats = {
     "playlists_loaded": 0, "api_streams": 0, "parsed_channels": 0,
     "alive_channels": 0, "filtered": {}, "categories": {},
     "ml_samples": 0, "ml_accuracy": 0.0, "ml_on": True, "nb_moved": 0,
-    "last_sweep": None, "sweep_removed": 0, "host_blacklisted": 0,
+    "last_sweep": None, "sweep_removed": 0, "sweep_dead": 0, "host_blacklisted": 0,
     "geo_pairs": 0, "check_counts": {},
 }
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -855,7 +854,6 @@ def check_fast(ch):
     except Exception:
         return 'blocked'
 
-# deep=False (набор): мягко — объём. deep=True (свип): рентген сегмента — чистка зомби.
 def check_one(ch, limit=None, deep=False):
     if urlparse(ch['url']).netloc in TRUSTED_HOSTS:
         return check_fast(ch)
@@ -914,7 +912,6 @@ def check_one(ch, limit=None, deep=False):
             return 'alive'
         if not deep:
             return 'alive'
-        # 🔬 рентген: читаем плейлист и щупаем первый сегмент
         try:
             r2 = session.get(url, timeout=min(remaining(), 10), headers=headers, verify=False, allow_redirects=True)
             text = r2.text[:200000]
@@ -1007,7 +1004,7 @@ def flush_playlist(alive, elapsed=None, replace=False):
             i = CAT_ORDER.index(ch['cat'])
         except ValueError:
             i = len(CAT_ORDER)
-        return (i, ch['name'].lower())
+        return (i, SWEEP_VERDICT.get(ch['url'], 0), ch['name'].lower())
     alive_sorted = sorted(alive, key=sort_key)
     if not alive_sorted:
         return
@@ -1158,13 +1155,14 @@ def quick_seed():
             ex.shutdown(wait=False)
     return alive
 
+# 🩺 СВИП v5.6: НИКОГДА не удаляет. Только вердикт для сортировки (зомби тонут на дно).
 def health_sweep():
     with cache_lock:
         snapshot = list(alive_list)
     if not snapshot or is_updating:
         return
-    logger.info(f"🩺 Проверка здоровья (рентген): {len(snapshot)} каналов...")
-    dead_urls = set()
+    logger.info(f"🩺 Проверка здоровья (рентген, без удалений): {len(snapshot)} каналов...")
+    dead_n = 0
     processed = 0
     ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
     futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT, True): ch for ch in snapshot}
@@ -1177,16 +1175,13 @@ def health_sweep():
                 res = 'dead'
             processed += 1
             if is_ok(res):
-                DEAD_STRIKES.pop(ch['url'], None)
+                SWEEP_VERDICT[ch['url']] = 0
             else:
-                n = DEAD_STRIKES.get(ch['url'], 0) + 1
-                if n >= DEAD_LIMIT:
-                    dead_urls.add(ch['url'])
-                else:
-                    DEAD_STRIKES[ch['url']] = n
+                SWEEP_VERDICT[ch['url']] = 1
+                dead_n += 1
             brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
     except TimeoutError:
-        logger.warning("⏳ Таймаут свипа: часть не успела — они остаются как есть")
+        logger.warning("⏳ Таймаут свипа: часть не успела — вердикт не меняем")
     except Exception as e:
         logger.error(f"Ошибка проверки здоровья: {e}")
     finally:
@@ -1194,14 +1189,15 @@ def health_sweep():
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
-    survivors = [ch for ch in snapshot if ch['url'] not in dead_urls]
-    dead = len(dead_urls)
-    if dead and survivors:
-        flush_playlist(survivors, replace=True)
     with cache_lock:
         stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        stats['sweep_removed'] = dead
-    logger.info(f"🩺 Итог: проверено {processed}/{len(snapshot)}, удалено {dead}, осталось {len(survivors)}")
+        stats['sweep_removed'] = 0
+        stats['sweep_dead'] = dead_n
+        snap = list(alive_list)
+    if snap:
+        flush_playlist(snap, replace=True)
+    logger.info(f"🩺 Итог: проверено {processed}/{len(snapshot)}, "
+                f"подозрительных {dead_n} (утоплены на дно, НЕ удалены)")
 
 def sweep_worker():
     while True:
@@ -1412,7 +1408,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v5.5</title>
+<title>IPTV Russia Pro MAX v5.6</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1424,8 +1420,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v5.5</h1>
-<div class="sub">📈 мягкий набор = объём • 🩺 рентген-свип = чистка</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v5.6</h1>
+<div class="sub">🔒 без удалений навсегда • 🌊 зомби тонут на дно категорий</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
