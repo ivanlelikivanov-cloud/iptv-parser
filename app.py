@@ -1,4 +1,3 @@
-равволыварпацыло
 import os
 import re
 import time
@@ -19,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '5.7'
+VERSION = '5.8'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -150,6 +149,7 @@ KEEPALIVE_SEC = 60
 SWEEP_EVERY = 21600
 SWEEP_TIMEOUT = 25.0
 SWEEP_WORKERS = 30
+DEAD_LIMIT = 3
 MAX_PLAYLIST_BYTES = 2_000_000
 MAX_HTML_BYTES = 524_288
 NET_P_MIN = 0.60
@@ -181,6 +181,10 @@ API_CAT_MAP = [
     (['comedy', 'entertainment', 'family', 'relax', 'general'], 'Развлекательные'),
 ]
 
+SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.1:10000')
+IS_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL'))
+CLEAN_MODE = os.environ.get('CLEAN', '0') == '1'
+
 def api_category(cats):
     if not cats:
         return None
@@ -193,6 +197,7 @@ def api_category(cats):
 playlist_cache = "#EXTM3U\n# IPTV Russia Pro — идёт первая проверка каналов...\n"
 alive_list = []
 SWEEP_VERDICT = {}
+DEAD_STRIKES = {}
 cache_lock = threading.Lock()
 is_updating = False
 stats = {
@@ -201,11 +206,12 @@ stats = {
     "alive_channels": 0, "filtered": {}, "categories": {},
     "ml_samples": 0, "ml_accuracy": 0.0, "ml_on": True, "nb_moved": 0,
     "last_sweep": None, "sweep_removed": 0, "sweep_dead": 0, "host_blacklisted": 0,
-    "geo_pairs": 0, "check_counts": {},
+    "geo_pairs": 0, "check_counts": {}, "clean_mode": CLEAN_MODE,
 }
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 logger.info(CFG_MSG)
+logger.info(f"🧭 Режим: {'RENDER' if IS_RENDER else 'LOCAL/RU'} | CLEAN={CLEAN_MODE}")
 
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
@@ -234,10 +240,9 @@ BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'denied', 'trebuetsya', 'оплат', 'заблокирован',
                  'ограничен', 'недоступен', 'роскомнадзор',
                  'не показывает', 'на этой территории', 'territory']
-SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://iptv-parser.onrender.com')
 
-def proxy_url(u, ua=None, ref=None):
-    q = SELF_URL + '/proxy?url=' + quote(u, safe='')
+def proxy_url(u, ua=None, ref=None, base=None):
+    q = (base or SELF_URL).rstrip('/') + '/proxy?url=' + quote(u, safe='')
     if ua:
         q += '&ua=' + quote(ua, safe='')
     if ref:
@@ -1010,7 +1015,6 @@ def flush_playlist(alive, elapsed=None, replace=False):
     alive_sorted = sorted(alive, key=sort_key)
     if not alive_sorted:
         return
-    # ✂️ Защита от раздувания памяти: сверх лимита первыми уходят зомби
     if len(alive_sorted) > MAX_ALIVE:
         good = [ch for ch in alive_sorted if SWEEP_VERDICT.get(ch['url'], 0) == 0]
         if len(good) >= MAX_ALIVE:
@@ -1042,7 +1046,7 @@ def flush_playlist(alive, elapsed=None, replace=False):
             stats['duration_sec'] = round(elapsed, 1)
     save_disk_cache(data)
 
-def build_playlist(chans, proxied):
+def build_playlist(chans, proxied, base=None):
     lines = [
         '#EXTM3U url-tvg="' + EPG_URLS + '"',
         '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M') +
@@ -1052,7 +1056,7 @@ def build_playlist(chans, proxied):
         lines.append(ch['inf'])
         if proxied:
             ua = ch.get('ua') or 'VLC/3.0.20 LibVLC/3.0.20'
-            lines.append(proxy_url(ch['url'], ua, ch.get('ref')))
+            lines.append(proxy_url(ch['url'], ua, ch.get('ref'), base))
         else:
             lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
             if ch.get('ref'):
@@ -1093,11 +1097,11 @@ def proxy():
                     if m:
                         u2 = m.group(1)
                         abs_u = u2 if u2.startswith('http') else base + u2
-                        s = s.replace(m.group(0), 'URI="' + proxy_url(abs_u, ua, ref) + '"')
+                        s = s.replace(m.group(0), 'URI="' + proxy_url(abs_u, ua, ref, request.url_root) + '"')
                 out.append(s)
             else:
                 abs_u = s if s.startswith('http') else base + s
-                out.append(proxy_url(abs_u, ua, ref))
+                out.append(proxy_url(abs_u, ua, ref, request.url_root))
         resp = Response('\n'.join(out), mimetype='application/vnd.apple.mpegurl')
         resp.headers['Cache-Control'] = 'no-store'
         return resp
@@ -1116,7 +1120,7 @@ def make_playlist_response():
     proxy_mode = request.args.get('proxy') == '1'
     with cache_lock:
         chans = list(alive_list)
-    data = build_playlist(chans, proxy_mode) if chans else playlist_cache
+    data = build_playlist(chans, proxy_mode, base=request.url_root) if chans else playlist_cache
     resp = Response(data, mimetype='application/vnd.apple.mpegurl')
     resp.headers['Content-Disposition'] = 'attachment; filename="iptv_russia_max.m3u"'
     resp.headers['Cache-Control'] = 'no-store'
@@ -1171,9 +1175,10 @@ def health_sweep():
         snapshot = list(alive_list)
     if not snapshot or is_updating:
         return
-    logger.info(f"🩺 Проверка здоровья (рентген, без удалений): {len(snapshot)} каналов...")
+    logger.info(f"🩺 Проверка здоровья (рентген): {len(snapshot)} каналов, CLEAN={CLEAN_MODE}...")
     dead_n = 0
     processed = 0
+    dead_urls = set()
     ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
     futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT, True): ch for ch in snapshot}
     try:
@@ -1186,9 +1191,16 @@ def health_sweep():
             processed += 1
             if is_ok(res):
                 SWEEP_VERDICT[ch['url']] = 0
+                DEAD_STRIKES.pop(ch['url'], None)
             else:
                 SWEEP_VERDICT[ch['url']] = 1
                 dead_n += 1
+                if CLEAN_MODE:
+                    n = DEAD_STRIKES.get(ch['url'], 0) + 1
+                    if n >= DEAD_LIMIT:
+                        dead_urls.add(ch['url'])
+                    else:
+                        DEAD_STRIKES[ch['url']] = n
             brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
     except TimeoutError:
         logger.warning("⏳ Таймаут свипа: часть не успела — вердикт не меняем")
@@ -1201,13 +1213,17 @@ def health_sweep():
             ex.shutdown(wait=False)
     with cache_lock:
         stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        stats['sweep_removed'] = 0
         stats['sweep_dead'] = dead_n
+        stats['sweep_removed'] = len(dead_urls)
         snap = list(alive_list)
-    if snap:
+    if CLEAN_MODE and dead_urls:
+        survivors = [ch for ch in snap if ch['url'] not in dead_urls]
+        if survivors:
+            flush_playlist(survivors, replace=True)
+    elif snap:
         flush_playlist(snap, replace=True)
-    logger.info(f"🩺 Итог: проверено {processed}/{len(snapshot)}, "
-                f"подозрительных {dead_n} (утоплены на дно, НЕ удалены)")
+    logger.info(f"🩺 Итог: проверено {processed}/{len(snapshot)}, подозрительных {dead_n}, "
+                f"удалено {len(dead_urls)}")
 
 def sweep_worker():
     while True:
@@ -1418,7 +1434,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v5.7</title>
+<title>IPTV Russia Pro MAX v5.8</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1430,8 +1446,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v5.7</h1>
-<div class="sub">🔒 без удалений • ✂️ лимит 15k против OOM • 🌊 зомби на дне</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v5.8</h1>
+<div class="sub">🇷 RU-режим • 🧹 CLEAN=1 честная чистка • ✂️ лимит 15k</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
@@ -1514,7 +1530,8 @@ if __name__ == '__main__':
     logger.info(f"🚀 Запуск на порту {port}")
     load_disk_cache()
     threading.Thread(target=background_worker, daemon=True).start()
-    threading.Thread(target=keepalive_worker, daemon=True).start()
+    if IS_RENDER:
+        threading.Thread(target=keepalive_worker, daemon=True).start()
     threading.Thread(target=sweep_worker, daemon=True).start()
     try:
         from waitress import serve
