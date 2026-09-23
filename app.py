@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '6.1'
+VERSION = '6.2'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -198,6 +198,15 @@ SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.1:10000')
 IS_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL'))
 CLEAN_MODE = os.environ.get('CLEAN', '0') == '1'
 
+#  Щадящий профиль для бесплатного Render (512 МБ): меньше потоков и пул,
+# иначе инстанс убивает процесс по памяти и плейлист сбрасывается.
+if IS_RENDER:
+    SOURCE_WORKERS = 12
+    CHECK_WORKERS = 40
+    SWEEP_WORKERS = 12
+    MAX_CHECK_POOL = 8000
+    MAX_EXTRA_SOURCES = 400
+
 def api_category(cats):
     if not cats:
         return None
@@ -229,7 +238,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info(CFG_MSG)
-logger.info(f"🧭 Режим: {'RENDER' if IS_RENDER else 'LOCAL/RU'} | CLEAN={CLEAN_MODE}")
+logger.info(f"🧭 Режим: {'RENDER' if IS_RENDER else 'LOCAL/RU'} | CLEAN={CLEAN_MODE} | "
+            f"потоков проверки: {CHECK_WORKERS}")
 
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
@@ -1434,6 +1444,7 @@ def update_cache():
             stats['nb_moved'] = moved
         logger.info(f"🧠 Ирочка распределила из «Общих»: {moved} каналов")
         raw = list(entries.values())
+        entries.clear()
         skipped = 0
         kept = []
         for ch in raw:
@@ -1472,6 +1483,7 @@ def update_cache():
         last_beat = time.time()
         ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
         futs = {ex.submit(check_one, ch, None, CLEAN_MODE): ch for ch in raw}
+        raw = None
         try:
             for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
                 checked += 1
@@ -1496,7 +1508,7 @@ def update_cache():
                 samples.append((ch['feats'], 1 if ok else 0))
                 brain.record(ch['host'], ok)
                 if time.time() - last_beat > HEARTBEAT_SEC:
-                    logger.info(f"Прогресс: {checked}/{len(raw)}, в плейлисте: {len(alive)} (+{added})")
+                    logger.info(f"Прогресс: {checked}/{len(raw_len) if False else checked}, в плейлисте: {len(alive)} (+{added})")
                     last_beat = time.time()
         except TimeoutError:
             logger.warning(f"⏳ Таймаут проверки ({CHECK_PHASE_MAX}с)")
@@ -1543,7 +1555,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v6.1</title>
+<title>IPTV Russia Pro MAX v6.2</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1555,8 +1567,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v6.1</h1>
-<div class="sub">✈️ Telegram + 🌐 веб-разведка • 🎨 лого+EPG • 🔬 рентген</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v6.2</h1>
+<div class="sub">🐢 щадящий режим Render • 🔬 рентген • 🎨 лого+EPG</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
