@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '6.5'
+VERSION = '6.6'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -96,12 +96,7 @@ STATIC_SOURCES = [
     "https://new.m3u.su/rurt", "https://new.m3u.su/rut", "https://new.m3u.su/ruz",
     "https://new.m3u.su/lgu", "https://new.m3u.su/lgn", "https://new.m3u.su/tvoe",
     "https://new.m3u.su/h", "https://new.m3u.su/mult",
-    "https://github.com/Free-TV/IPTV/raw/master/playlists/playlist_russia.m3u8",
-    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
-    "https://raw.githubusercontent.com/zhenyafedorov/iptv/main/iptv.m3u",
-    "https://raw.githubusercontent.com/SamantazFox/IPTV-RU/master/iptv.m3u",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
 ]
 
 HTML_SOURCES = [
@@ -207,7 +202,7 @@ API_CAT_MAP = [
     (['comedy', 'entertainment', 'family', 'relax', 'general'], 'Развлекательные'),
 ]
 
-SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.0:10000')
+SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.1:10000')
 IS_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL'))
 CLEAN_MODE = os.environ.get('CLEAN', '0') == '1'
 
@@ -217,7 +212,7 @@ if IS_RENDER:
     SWEEP_WORKERS = 10
     MAX_CHECK_POOL = 2500
     MAX_EXTRA_SOURCES = 400
-    CLEAN_MODE = 0
+    CLEAN_MODE = False
 
 def api_category(cats):
     if not cats:
@@ -377,9 +372,9 @@ class CategoryNet:
         self.dim = dim
         self.W = {}
         self.b = {}
-    @staticmethod:
-        def _h(t):
-            return zlib.crc32(t.encode('utf-8')) & 0x7fffffff
+    @staticmethod
+    def _h(t):
+        return zlib.crc32(t.encode('utf-8')) & 0x7fffffff
     def feats(self, name):
         words = re.findall(r'[a-zа-яё0-9]+', name.lower())
         idx = set()
@@ -964,7 +959,7 @@ def get_category(name):
         return 'Детские'
     if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
         return 'Новости'
-    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хокей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
+    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
         return 'Спорт'
     if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
         return 'Кино и сериалы'
@@ -1658,19 +1653,19 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v6.5</title>
+<title>IPTV Russia Pro MAX v6.6</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
-card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+.card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
 h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
-btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
-btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
-stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
-stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
-chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
+.btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
+.btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
+.stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
+.stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
+.chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v6.5</h1>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v6.6</h1>
 <div class="sub">🔬 рентген при наборе = без крутилок • 🇷 RU-хосты вверх</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
