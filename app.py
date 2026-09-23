@@ -8,7 +8,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '7.0'
+VERSION = '7.1'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -20,7 +20,6 @@ VERDICT_FILE = os.path.join(BASE_DIR, 'verdict.json')
 GITHUB_RAW = "https://raw.githubusercontent.com/ivanlelikivanov-cloud/iptv-parser/main/app.py"
 SELF_UPDATE_INTERVAL = 3600
 
-# === Источники (твой актуальный список) ===
 STATIC_SOURCES = [
     "https://iptv-org.github.io/iptv/index.m3u",
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
@@ -147,7 +146,7 @@ KEEPALIVE_SEC = 60
 SWEEP_EVERY = 43200
 SWEEP_TIMEOUT = 10.0
 SWEEP_WORKERS = 12
-DEAD_LIMIT = 3
+DEAD_LIMIT = 2
 MAX_PLAYLIST_BYTES = 1000000
 MAX_HTML_BYTES = 300000
 NET_P_MIN = 0.60
@@ -184,7 +183,7 @@ API_CAT_MAP = [
 SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.1:10000')
 IS_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL'))
 CLEAN_MODE = os.environ.get('CLEAN', '0') == '1'
-ENABLE_SELF_UPDATE = not IS_RENDER  # self-update только на телефоне/VPS, не на Render
+ENABLE_SELF_UPDATE = not IS_RENDER
 
 if IS_RENDER:
     SOURCE_WORKERS = 10
@@ -423,7 +422,7 @@ class MLBrain:
         rep, cnt = self.host_stats(host)
         heur = 0.5 * feats[2] + 0.3 * feats[3] + 0.2 * (1.0 - feats[5])
         try: p = self.model.prob(feats)
-        except: p = None
+        except Exception: p = None
         if p is None:
             return (SCORE_NOMODEL_REP * rep + SCORE_NOMODEL_HEUR * heur +
                     SCORE_NOMODEL_CNT * min(cnt / 10.0, 1.0))
@@ -436,7 +435,7 @@ class MLBrain:
         try:
             preds = [1 if self.model.prob(x) > 0.5 else 0 for x in X[:300]]
             acc = sum(1 for p, t in zip(preds, y[:300]) if p == t) / max(1, len(preds))
-        except: acc = None
+        except Exception: acc = None
         try:
             self.model.partial_fit(X, y)
             self.trained_samples += len(samples)
@@ -582,7 +581,7 @@ def fetch_ru_regions():
             if code.upper().startswith('RU-'):
                 urls.append('https://iptv-org.github.io/iptv/regions/' + code.lower() + '.m3u')
         return urls
-    except: return []
+    except Exception: return []
 
 def fetch_github():
     sess = get_session()
@@ -597,7 +596,7 @@ def fetch_github():
                 for item in r.json().get('items', []):
                     full = item.get('full_name'); branch = item.get('default_branch') or 'main'
                     if full: repos.append((full, branch))
-        except: continue
+        except Exception: continue
     repos = list(dict.fromkeys(repos))[:40]
     found = set()
     def read_readme(rb):
@@ -608,13 +607,15 @@ def fetch_github():
             if r.status_code == 200:
                 return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I)
             r.close()
-        except: pass
+        except Exception: pass
         return []
     ex = ThreadPoolExecutor(max_workers=8)
     try:
         for links in ex.map(read_readme, repos, timeout=90): found.update(links)
-    except: pass
-    finally: ex.shutdown(wait=False)
+    except Exception: pass
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     for full, branch in repos:
         base = f'https://raw.githubusercontent.com/{full}/{branch}'
         for path in GH_COMMON_PATHS: found.add(f'{base}/{path}')
@@ -629,20 +630,22 @@ def fetch_web_search():
             if r.status_code == 200:
                 m3u.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', r.text, re.I))
                 for enc in re.findall(r'uddg=([^&"]+)', r.text): pages.append(unquote(enc))
-        except: continue
+        except Exception: continue
     def scrape(page):
         try:
             r = get_session().get(page, headers=polite_headers(), timeout=(5, 10), verify=False, stream=True)
             if r.status_code == 200:
                 return re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I)
             r.close()
-        except: pass
+        except Exception: pass
         return []
     ex = ThreadPoolExecutor(max_workers=8)
     try:
         for links in ex.map(scrape, pages[:25], timeout=90): m3u.update(links)
-    except: pass
-    finally: ex.shutdown(wait=False)
+    except Exception: pass
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     return list(m3u)
 
 def fetch_telegram():
@@ -653,7 +656,7 @@ def fetch_telegram():
             if r.status_code == 200:
                 found.update(re.findall(r'(https?://[^\s"\'<>()]+?\.m3u8?)', _read_capped(r, MAX_HTML_BYTES), re.I))
             else: r.close()
-        except: continue
+        except Exception: continue
     return list(found)
 
 def fetch_iptv_org_api():
@@ -699,7 +702,7 @@ def fetch_source_text(url):
             if r.status_code != 200: r.close(); return None
             text = _read_capped(r, MAX_PLAYLIST_BYTES)
             return text if text else None
-    except: return None
+    except Exception: return None
 
 def _clean(lst): return [w for w in lst if isinstance(w, str) and len(w.strip()) >= 2]
 
@@ -753,7 +756,7 @@ def get_category(name):
     n = name.lower()
     if any(w in n for w in ['дет','kids','мульт','cartoon','карусель','disney','аниме','nick','baby']): return 'Детские'
     if any(w in n for w in ['новост','вести','информ','news','24','известия','euronews','bbc','cnn','бизнес']): return 'Новости'
-    if any(w in n for w in ['спорт','sport','футбол','хоккей','матч','khl','ufc','бокс','киберспорт','khl']): return 'Спорт'
+    if any(w in n for w in ['спорт','sport','футбол','хоккей','матч','khl','ufc','бокс','киберспорт','баскетбол','теннис']): return 'Спорт'
     if any(w in n for w in ['кино','kino','movie','film','фильм','сериал','series','tv1000','амедиа']): return 'Кино и сериалы'
     if any(w in n for w in ['музык','music','mtv','bridge','шансон','рутв','ru.tv','tnt music','муз']): return 'Музыка'
     if any(w in n for w in ['докум','doc','познав','истори','history','discovery','science','наука','природ','культур','спас','союз']): return 'Познавательные'
@@ -783,19 +786,21 @@ def check_one(ch, limit=None, deep=False):
         if r.status_code < 400:
             ct = r.headers.get('content-type', '').lower()
             if any(g in ct for g in GOOD_CT) and 'mpegurl' not in ct: return 'alive'
-    except: pass
+    except Exception: pass
     for _ in range(2):
         if remaining() <= 1: return 'blocked'
         try:
             r = session.get(url, timeout=remaining(), headers=headers, stream=True, allow_redirects=True, verify=False)
-        except: continue
+        except Exception: continue
         if r.status_code in (401, 403, 451): return 'blocked'
         if r.status_code in (404, 410): return 'dead'
         if r.status_code >= 400: return 'blocked'
         ct = r.headers.get('content-type', '').lower()
         try: chunk = next(r.iter_content(chunk_size=2048), b'')
-        except: continue
-        finally: r.close()
+        except Exception: continue
+        finally:
+            try: r.close()
+            except Exception: pass
         if not chunk: return 'dead'
         is_hls = ('mpegurl' in ct) or ('.m3u8' in url.lower()) or (chunk[:7] == b'#EXTM3U')
         if not is_hls:
@@ -808,7 +813,7 @@ def check_one(ch, limit=None, deep=False):
         try:
             r2 = session.get(url, timeout=min(remaining(), 10), headers=headers, verify=False, allow_redirects=True)
             text = r2.text[:200000]
-        except: return 'blocked'
+        except Exception: return 'blocked'
         if '#EXTM3U' not in text: return 'dead'
         base = url.rsplit('/', 1)[0] + '/'
         seg = _first_media_uri(text, base)
@@ -818,8 +823,9 @@ def check_one(ch, limit=None, deep=False):
             rs = session.get(seg, timeout=min(remaining(), 10), headers=headers, stream=True, verify=False, allow_redirects=True)
             if rs.status_code in (401, 403, 451): return 'blocked'
             if rs.status_code >= 400: return 'dead'
-            head = next(rs.iter_content(chunk_size=4096), b''); rs.close()
-        except: return 'blocked'
+            head = next(rs.iter_content(chunk_size=4096), b'')
+            rs.close()
+        except Exception: return 'blocked'
         if not head: return 'blocked'
         if head[:1] == b'\x47' or b'ftyp' in head[:16] or b'moov' in head[:32]: return 'alive'
         low = head[:200].lower()
@@ -917,8 +923,10 @@ def quick_seed():
     try:
         for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
             if txt: parse_m3u(txt, entries, seen, reasons)
-    except: pass
-    finally: ex.shutdown(wait=False)
+    except Exception: pass
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     raw = list(entries.values())[:1000]
     if not raw: return []
     alive = []; ex = ThreadPoolExecutor(max_workers=20)
@@ -927,11 +935,13 @@ def quick_seed():
         for f in as_completed(futs.keys(), timeout=90):
             ch = futs[f]
             try: res = f.result()
-            except: res = 'dead'
+            except Exception: res = 'dead'
             if is_ok(res): alive.append(ch)
             brain.record(urlparse(ch['url']).netloc, is_ok(res))
-    except: pass
-    finally: ex.shutdown(wait=False)
+    except Exception: pass
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     return alive
 
 def health_sweep():
@@ -946,28 +956,31 @@ def health_sweep():
         for f in as_completed(futs.keys(), timeout=600):
             ch = futs[f]
             try: res = f.result()
-            except: res = 'dead'
+            except Exception: res = 'dead'
             processed += 1
             if is_ok(res):
                 SWEEP_VERDICT[ch['url']] = 0; DEAD_STRIKES.pop(ch['url'], None)
             else:
                 SWEEP_VERDICT[ch['url']] = 1; dead_n += 1
-                if CLEAN_MODE:
-                    n = DEAD_STRIKES.get(ch['url'], 0) + 1
-                    if n >= DEAD_LIMIT:
-                        key = norm_name(ch['name']); pick = None
-                        for c in RESERVE.get(key, []):
-                            if c['url'] != ch['url'] and c['url'] not in snap_urls and not is_ott_host(c['url']):
-                                pick = c; break
-                        if pick:
-                            ch['url'] = pick['url']; ch['ua'] = pick['ua']; ch['ref'] = pick['ref']
-                            snap_urls.add(pick['url']); SWEEP_VERDICT[ch['url']] = 0; swapped += 1
-                        else: dead_urls.add(ch['url'])
-                    else: DEAD_STRIKES[ch['url']] = n
+                n = DEAD_STRIKES.get(ch['url'], 0) + 1
+                if n >= DEAD_LIMIT:
+                    key = norm_name(ch['name']); pick = None
+                    for c in RESERVE.get(key, []):
+                        if c['url'] != ch['url'] and c['url'] not in snap_urls and not is_ott_host(c['url']):
+                            pick = c; break
+                    if pick:
+                        ch['url'] = pick['url']; ch['ua'] = pick['ua']; ch['ref'] = pick['ref']
+                        snap_urls.add(pick['url']); SWEEP_VERDICT[ch['url']] = 0; swapped += 1
+                    elif CLEAN_MODE:
+                        dead_urls.add(ch['url'])
+                else:
+                    DEAD_STRIKES[ch['url']] = n
             brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
     except TimeoutError: logger.warning("⏳ Свип таймаут")
     except Exception as e: logger.error(f"Свип: {e}")
-    finally: ex.shutdown(wait=False)
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     save_verdicts()
     with cache_lock:
         stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -977,9 +990,12 @@ def health_sweep():
         survivors = [ch for ch in snap if ch['url'] not in dead_urls]
         if survivors: flush_playlist(survivors, replace=True)
     elif snap: flush_playlist(snap, replace=True)
+    logger.info(f"🩺 Итог: проверено {processed}, подозрительных {dead_n}, "
+                f"заменено {swapped}, удалено {len(dead_urls)}")
 
 def update_cache():
     global playlist_cache, is_updating, LOGO_MAP, RESERVE
+    global MAX_CHECK_POOL, CHECK_WORKERS, SOURCE_WORKERS
     if is_updating: return False
     is_updating = True; start = time.time()
     agent_state['status'] = 'updating'
@@ -1033,10 +1049,13 @@ def update_cache():
         try:
             for f in as_completed(futs, timeout=SOURCE_PHASE_MAX):
                 try: txt = f.result()
-                except: txt = None
+                except Exception: txt = None
                 if txt: loaded += 1; parse_m3u(txt, entries, seen, reasons)
-        except: pass
-        finally: ex.shutdown(wait=False)
+        except TimeoutError: logger.warning(f"⏳ Таймаут источников, успело {loaded}")
+        except Exception as e: logger.error(f"Фаза источников: {e}")
+        finally:
+            try: ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError: ex.shutdown(wait=False)
         with cache_lock: stats['filtered'] = dict(reasons)
         kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Общие']
         cat_net.train(train_pairs + kw_pairs)
@@ -1068,7 +1087,7 @@ def update_cache():
             for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
                 checked += 1; ch = futs[f]
                 try: res = f.result()
-                except: res = 'dead'
+                except Exception: res = 'dead'
                 check_counts[res] += 1
                 ok = is_ok(res)
                 if ok and ch['url'] not in alive_urls:
@@ -1082,8 +1101,11 @@ def update_cache():
                 if time.time() - last_beat > HEARTBEAT_SEC:
                     logger.info(f"Прогресс: {checked}/{total}, в плейлисте: {len(alive)} (+{added})")
                     last_beat = time.time()
-        except: pass
-        finally: ex.shutdown(wait=False)
+        except TimeoutError: logger.warning(f"⏳ Таймаут проверки ({CHECK_PHASE_MAX}с)")
+        except Exception as e: logger.error(f"Фаза проверки: {e}")
+        finally:
+            try: ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError: ex.shutdown(wait=False)
         with cache_lock: stats['check_counts'] = dict(check_counts)
         apply_net(alive)
         before = len(alive)
@@ -1098,9 +1120,8 @@ def update_cache():
         flush_playlist(alive, elapsed=elapsed)
         logger.info(f"✅ Готово: {len(alive)} (+{added}) за {elapsed:.0f}с")
         return True
-    except MemoryError as e:
-        logger.exception(f"🧯 OOM: уменьшаю пулы")
-        global MAX_CHECK_POOL, CHECK_WORKERS, SOURCE_WORKERS
+    except MemoryError:
+        logger.exception("🧯 OOM: уменьшаю пулы вдвое")
         MAX_CHECK_POOL = max(500, MAX_CHECK_POOL // 2)
         CHECK_WORKERS = max(4, CHECK_WORKERS // 2)
         SOURCE_WORKERS = max(4, SOURCE_WORKERS // 2)
@@ -1112,7 +1133,6 @@ def update_cache():
         is_updating = False
         agent_state['status'] = 'idle'
 
-# ===================== АГЕНТ: SUPERVISOR =====================
 _workers = {}
 _workers_lock = threading.Lock()
 
@@ -1130,12 +1150,19 @@ def _register_worker(name, target, daemon=True):
     with _workers_lock: _workers[name] = t
     return t
 
+def run_diagnosis():
+    alive = stats.get('alive_channels', 0)
+    last = stats.get('last_update')
+    diag = []
+    if alive < 50: diag.append(f"мало каналов ({alive})")
+    if not last and not is_updating: diag.append("ещё не было прогонов")
+    if is_updating: diag.append("идёт прогон")
+    if agent_state['oom_caught'] > 0: diag.append(f"OOM ×{agent_state['oom_caught']}")
+    if agent_state['worker_restarts'] > 3: diag.append(f"много рестартов ({agent_state['worker_restarts']})")
+    agent_state['last_diagnosis'] = ', '.join(diag) if diag else 'ok'
+
 def supervisor_loop():
-    """Следит за всеми воркерами, поднимает упавших"""
-    expected = {
-        'background': background_worker,
-        'sweep': sweep_worker,
-    }
+    expected = {'background': background_worker, 'sweep': sweep_worker}
     if IS_RENDER: expected['keepalive'] = keepalive_worker
     for name, target in expected.items():
         _register_worker(name, target)
@@ -1152,25 +1179,11 @@ def supervisor_loop():
                     agent_state['worker_restarts'] += 1
         run_diagnosis()
 
-def run_diagnosis():
-    """Анализирует состояние и пишет диагноз"""
-    alive = stats.get('alive_channels', 0)
-    last = stats.get('last_update')
-    diag = []
-    if alive < 50: diag.append(f"мало каналов ({alive})")
-    if not last and not is_updating: diag.append("ещё не было прогонов")
-    if is_updating: diag.append("идёт прогон")
-    if agent_state['oom_caught'] > 0: diag.append(f"OOM ×{agent_state['oom_caught']}")
-    if agent_state['worker_restarts'] > 3: diag.append(f"много рестартов ({agent_state['worker_restarts']})")
-    agent_state['last_diagnosis'] = ', '.join(diag) if diag else 'ok'
-
-# ===================== АГЕНТ: SELF-UPDATER =====================
 def self_update_loop():
-    """Раз в час проверяет GitHub, скачивает новую версию, перезапускается"""
     if not ENABLE_SELF_UPDATE:
         logger.info("🤖 Self-update отключен (Render)")
         while True: time.sleep(3600)
-    logger.info(f"🤖 Self-update ON, проверяю {GITHUB_RAW}")
+    logger.info("🤖 Self-update ON")
     while True:
         time.sleep(SELF_UPDATE_INTERVAL)
         try:
@@ -1181,14 +1194,12 @@ def self_update_loop():
             if not m: continue
             remote_ver = m.group(1)
             if remote_ver == VERSION: continue
-            logger.info(f"🤖 Новая версия на GitHub: {remote_ver} (у меня {VERSION}) — обновляюсь")
-            tmp = os.path.join(BASE_DIR, 'app.py.new')
-            with open(tmp, 'w', encoding='utf-8') as f: f.write(remote_code)
-            # sanity-check: запустится ли новый код
+            logger.info(f"🤖 Новая версия на GitHub: {remote_ver} (у меня {VERSION})")
             try: compile(remote_code, 'app.py.new', 'exec')
             except SyntaxError as e:
-                logger.error(f"🤖 Новый код с синтаксической ошибкой: {e} — пропускаю")
-                os.remove(tmp); continue
+                logger.error(f"🤖 Новый код с ошибкой: {e} — пропускаю"); continue
+            tmp = os.path.join(BASE_DIR, 'app.py.new')
+            with open(tmp, 'w', encoding='utf-8') as f: f.write(remote_code)
             bak = os.path.join(BASE_DIR, f'app.py.bak.{VERSION}')
             cur = os.path.join(BASE_DIR, 'app.py')
             os.replace(cur, bak); os.replace(tmp, cur)
@@ -1220,12 +1231,11 @@ def keepalive_worker():
         time.sleep(KEEPALIVE_SEC); n += 1
         if n % 5 == 0:
             try: requests.get(SELF_URL + '/health', timeout=10)
-            except: pass
+            except Exception: pass
 
-# ===================== HTTP =====================
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro v7.0</title>
+<title>IPTV Russia Pro v7.1</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1237,8 +1247,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🤖 IPTV Russia Pro v7.0</h1>
-<div class="sub">встроенный агент: self-update + supervisor + OOM-guard</div>
+<h1>🤖 IPTV Russia Pro v7.1</h1>
+<div class="sub">агент: self-update + supervisor + OOM-guard • мёртвые → зеркала</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
@@ -1280,7 +1290,8 @@ def health(): return jsonify({'status': 'ok', 'agent': agent_state['status']})
 def playlist():
     proxy_mode = request.args.get('proxy') == '1'
     with cache_lock: chans = list(alive_list)
-    if not chans: return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
+    if not chans:
+        return Response(playlist_cache, mimetype='application/vnd.apple.mpegurl')
     lines = ['#EXTM3U url-tvg="' + EPG_URLS + '"',
              f'# IPTV Russia Pro MAX v{VERSION} | ' + time.strftime('%Y-%m-%d %H:%M') +
              (' | PROXY' if proxy_mode else ' | DIRECT')]
@@ -1294,7 +1305,8 @@ def playlist():
             if ch.get('ref'): lines.append('#EXTVLCOPT:http-referrer=' + ch['ref'])
             lines.append(ch['url'])
     return Response('\n'.join(lines), mimetype='application/vnd.apple.mpegurl',
-                    headers={'Content-Disposition': 'attachment; filename="iptv.m3u"', 'Cache-Control': 'no-store'})
+                    headers={'Content-Disposition': 'attachment; filename="iptv.m3u"',
+                             'Cache-Control': 'no-store'})
 
 @app.route('/proxy')
 def proxy():
@@ -1306,8 +1318,9 @@ def proxy():
     if ref: hdr['Referer'] = ref
     try:
         r = requests.get(url, headers=hdr, stream=True, timeout=(10, 30), verify=False, allow_redirects=True)
-    except: return ('', 502)
-    if r.status_code >= 400: r.close(); return ('', 502)
+    except Exception: return ('', 502)
+    if r.status_code >= 400:
+        r.close(); return ('', 502)
     ct = (r.headers.get('Content-Type') or 'application/octet-stream').lower()
     if 'mpegurl' in ct or url.lower().endswith(('.m3u8', '.m3u')):
         text = r.text; r.close()
@@ -1326,12 +1339,14 @@ def proxy():
             else:
                 abs_u = s if s.startswith('http') else base + s
                 out.append(proxy_url(abs_u, ua, ref, request.url_root))
-        return Response('\n'.join(out), mimetype='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-store'})
+        return Response('\n'.join(out), mimetype='application/vnd.apple.mpegurl',
+                        headers={'Cache-Control': 'no-store'})
     def gen():
         try:
             for chunk in r.iter_content(65536): yield chunk
         finally: r.close()
-    return Response(gen(), mimetype=ct.split(';')[0], headers={'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*'})
+    return Response(gen(), mimetype=ct.split(';')[0],
+                    headers={'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*'})
 
 @app.route('/status')
 def status():
@@ -1353,13 +1368,11 @@ def fallback(any_path):
         return playlist()
     return make_home_page()
 
-# ===================== СТАРТ =====================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Запуск на порту {port}")
     load_verdicts()
     load_disk_cache()
-    # Агент запускает всех воркеров сам через supervisor
     _register_worker('supervisor', supervisor_loop)
     _register_worker('self_update', self_update_loop)
     try:
