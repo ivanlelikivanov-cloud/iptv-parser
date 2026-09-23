@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '6.3'
+VERSION = '6.5'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -96,7 +96,14 @@ STATIC_SOURCES = [
     "https://new.m3u.su/rurt", "https://new.m3u.su/rut", "https://new.m3u.su/ruz",
     "https://new.m3u.su/lgu", "https://new.m3u.su/lgn", "https://new.m3u.su/tvoe",
     "https://new.m3u.su/h", "https://new.m3u.su/mult",
+    "https://github.com/Free-TV/IPTV/raw/master/playlists/playlist_russia.m3u8",
+    "https://raw.githubusercontent.com/DenMSU/tv/main/tv.m3u",
+    "https://raw.githubusercontent.com/zhenyafedorov/iptv/main/iptv.m3u",
+    "https://raw.githubusercontent.com/SamantazFox/IPTV-RU/master/iptv.m3u",
+    "https://iptv-org.github.io/iptv/regions/ru.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
 ]
+
 HTML_SOURCES = [
     "https://m3u.su/", "https://m3u.su/m3u/", "https://new.m3u.su/",
     "https://sat-portal.com/plejlisty/", "https://6x6.msk.ru/", "https://homtv.ru/",
@@ -110,6 +117,7 @@ HTML_SOURCES = [
     "https://github.com/Free-iptv/iptv", "https://github.com/4mirror/iptv",
     "https://github.com/hmlendea/iptv-playlist-aggregator",
 ]
+
 GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'iptv russian', 'm3u ru', 'm3u russia',
                   'iptv playlist ru', 'topic:iptv ru', 'iptv m3u8 ru', 'iptv снг', 'iptv cis',
                   'm3u8 russia', 'iptv ru playlist m3u8']
@@ -144,39 +152,42 @@ try:
 except Exception:
     pass
 
-MAX_CHANNELS = 20000
-MAX_ALIVE = 15000
-MAX_EXTRA_SOURCES = 800
-MAX_CHECK_POOL = 20000
-SOURCE_WORKERS = 24
-CHECK_WORKERS = 100
-CHECK_TIMEOUT = 40.0
-SEED_TIMEOUT = 8.0
-SOURCE_PHASE_MAX = 900
-CHECK_PHASE_MAX = 2400
+MAX_CHANNELS = 8000
+MAX_ALIVE = 6000
+MAX_EXTRA_SOURCES = 600
+MAX_CHECK_POOL = 3000
+SOURCE_WORKERS = 12
+CHECK_WORKERS = 15
+CHECK_TIMEOUT = 15.0
+SEED_TIMEOUT = 5.0
+SOURCE_PHASE_MAX = 600
+CHECK_PHASE_MAX = 1200
 UPDATE_EVERY = 86400
 RETRY_IF_EMPTY = 600
-FLUSH_EVERY = 10
+FLUSH_EVERY = 5
 HEARTBEAT_SEC = 20
 KEEPALIVE_SEC = 60
-SWEEP_EVERY = 21600
-SWEEP_TIMEOUT = 25.0
-SWEEP_WORKERS = 24
+SWEEP_EVERY = 43200
+SWEEP_TIMEOUT = 10.0
+SWEEP_WORKERS = 12
 DEAD_LIMIT = 3
-MAX_PLAYLIST_BYTES = 2_000_000
-MAX_HTML_BYTES = 524_288
+MAX_PLAYLIST_BYTES = 1000000
+MAX_HTML_BYTES = 300000
 NET_P_MIN = 0.60
 NET_MARGIN = 0.25
 HOST_REP_MIN = 0.15
 HOST_REP_CNT = 10
 SCORE_MODEL_P, SCORE_MODEL_REP, SCORE_MODEL_HEUR = 0.5, 0.35, 0.15
 SCORE_NOMODEL_REP, SCORE_NOMODEL_HEUR, SCORE_NOMODEL_CNT = 0.55, 0.25, 0.2
+RU_BONUS = 0.15
 
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 TRUSTED_HOSTS = {'iptv-org.github.io', 'raw.githubusercontent.com', 'new.m3u.su',
                  'm3u.su', 'webarmen.com', 'smolnp.github.io', 'iptv-list.mart.ru'}
 OTT_HOSTS = ('wink.ru', 'okko.tv', 'ivi.ru', 'more.tv', 'kion.ru', 'start.ru',
              'premier.one', 'zabava.ru', 'rt.ru', 'rostelecom.ru')
+RU_HOST_HINTS = ('.ru', '.su', '.рф', 'm3u.su', 'new.m3u.su', 'webarmen',
+                 'iptv-list', 'smolnp')
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
              'Музыка', 'Познавательные', 'Развлекательные', 'Региональные',
              'Радио', 'Общие']
@@ -196,16 +207,17 @@ API_CAT_MAP = [
     (['comedy', 'entertainment', 'family', 'relax', 'general'], 'Развлекательные'),
 ]
 
-SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.1:10000')
+SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.0:10000')
 IS_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL'))
 CLEAN_MODE = os.environ.get('CLEAN', '0') == '1'
 
 if IS_RENDER:
-    SOURCE_WORKERS = 12
-    CHECK_WORKERS = 40
-    SWEEP_WORKERS = 12
-    MAX_CHECK_POOL = 8000
+    SOURCE_WORKERS = 10
+    CHECK_WORKERS = 12
+    SWEEP_WORKERS = 10
+    MAX_CHECK_POOL = 2500
     MAX_EXTRA_SOURCES = 400
+    CLEAN_MODE = 0
 
 def api_category(cats):
     if not cats:
@@ -222,7 +234,7 @@ SWEEP_VERDICT = {}
 DEAD_STRIKES = {}
 LOGO_MAP = {}
 RESERVE = {}
-RESERVE_CAP = 6
+RESERVE_CAP = 4
 cache_lock = threading.Lock()
 is_updating = False
 stats = {
@@ -365,9 +377,9 @@ class CategoryNet:
         self.dim = dim
         self.W = {}
         self.b = {}
-    @staticmethod
-    def _h(t):
-        return zlib.crc32(t.encode('utf-8')) & 0x7fffffff
+    @staticmethod:
+        def _h(t):
+            return zlib.crc32(t.encode('utf-8')) & 0x7fffffff
     def feats(self, name):
         words = re.findall(r'[a-zа-яё0-9]+', name.lower())
         idx = set()
@@ -519,6 +531,13 @@ def extract_features(ch):
 def is_ott_host(url):
     h = urlparse(url).netloc.lower()
     return any(d in h for d in OTT_HOSTS)
+
+def is_ru_host(url):
+    h = urlparse(url).netloc.lower()
+    return any(t in h for t in RU_HOST_HINTS)
+
+def ru_host_bonus(url):
+    return RU_BONUS if is_ru_host(url) else 0.0
 
 def push_reserve(key, url, ua='', ref=''):
     if not key or is_ott_host(url):
@@ -863,7 +882,7 @@ ADULT_WORDS = _clean(['xxx', 'adult', 'porn', 'sex', 'hentai', '18+', 'эрот�
 UA_WORDS = _clean(['україн', 'украина', 'україна', 'kyiv', 'kiev', 'київ', 'львів', 'львов',
                    'харків', 'дніпро', 'одеса', 'суспільне', 'суспильне', 'прямий', 'тсн',
                    '1+1', '2+2', 'інтер', 'inter ua', 'верес', 'тоніс', 'тонис', 'ua: ',
-                   'ua |', '| ua', ' ukraine', 'украинск', '5 kanal', 'надія', 'новий',
+                   'ua |', '| ua', ' ukraine', 'украинск', '5 канал', 'надія', 'новий',
                    'перший', 'ранок', 'мова', 'тб', 'нація', 'світ тв', 'люд', 'країна'])
 PAYWALL_WORDS = _clean(['подписк', 'subscription', 'оплат', 'payment', 'купить', 'продаж',
                         'whatsapp', 'telegram', 't.me', 'promo', 'реклам', 'advert',
@@ -874,7 +893,7 @@ BLACKLIST_WORDS = _clean(['fifa', 'world cup', 'чемпионат мира', '�
 RADIO_WORDS = _clean(['радио', 'radio', 'fm', 'ржд', 'дорожное', 'авторадио', 'ретро fm',
                       'europa plus', 'европа плюс', 'шансон', 'dfm', 'monte carlo', 'maximum',
                       'record', 'energy', 'relax fm', 'детское радио', 'юмор fm', 'azadliq',
-                      'radiola', 'dorognoe', 'nashe radio', 'наше радио', 'kommersant fm',
+                      'радиола', 'дорогное', 'наше радио', 'kommersant fm',
                       'маяк', 'вести fm', 'радио дача', 'хит fm', 'love radio', 'радио мир'])
 LATIN_RU_RE = re.compile(
     r'\b(?:rtr|planeta|pervyi|pervy|channel one|match tv|zvezda|karusel|carousel|'
@@ -945,7 +964,7 @@ def get_category(name):
         return 'Детские'
     if any(w in n for w in ['новост', 'вести', 'информ', 'news', '24', 'известия', 'ртд', 'euronews', 'bbc', 'cnn', 'политик', 'эконом', 'бизнес', 'business']):
         return 'Новости'
-    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хоккей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
+    if any(w in n for w in ['спорт', 'sport', 'футбол', 'хокей', 'матч', 'khl', 'ufc', 'бокс', 'киберспорт', 'esport', 'автоспорт', 'баскетбол', 'теннис', 'биатлон', 'лыжн']):
         return 'Спорт'
     if any(w in n for w in ['кино', 'kino', 'movie', 'film', 'фильм', 'сериал', 'series', 'serial', 'cinema', 'tv1000', 'амедиа', 'дом кино', 'иллюзион', 'премьер', 'боевик', 'детектив', 'мелодрам', 'комедия', 'ужас', 'фантаст', 'триллер', 'киномикс', 'киносемья', 'кинокомедия', 'киносвидание', 'киноужас', 'кинопоказ']):
         return 'Кино и сериалы'
@@ -1169,7 +1188,8 @@ def flush_playlist(alive, elapsed=None, replace=False):
             i = CAT_ORDER.index(ch['cat'])
         except ValueError:
             i = len(CAT_ORDER)
-        return (i, SWEEP_VERDICT.get(ch['url'], 0), 0 if is_hd(ch['name']) else 1, ch['name'].lower())
+        return (i, SWEEP_VERDICT.get(ch['url'], 0), 0 if is_ru_host(ch['url']) else 1,
+                0 if is_hd(ch['name']) else 1, ch['name'].lower())
     alive_sorted = sorted(alive, key=sort_key)
     if not alive_sorted:
         return
@@ -1535,7 +1555,7 @@ def update_cache():
         for ch in raw:
             ch['feats'] = extract_features(ch)
             ch['host'] = urlparse(ch['url']).netloc
-            ch['ml_score'] = brain.score(ch['feats'], ch['host'])
+            ch['ml_score'] = brain.score(ch['feats'], ch['host']) + ru_host_bonus(ch['url'])
         raw.sort(key=lambda c: -c['ml_score'])
         if len(raw) > MAX_CHECK_POOL:
             logger.info(f"Кандидатов {len(raw)}, ML выбрал топ-{MAX_CHECK_POOL}")
@@ -1547,8 +1567,8 @@ def update_cache():
             stats['playlists_loaded'] = loaded
             stats['api_streams'] = len(api_channels)
             stats['parsed_channels'] = len(raw)
-        logger.info(f"Кандидатов: {len(raw)}. Проверка: "
-                    f"{'рентген (CLEAN)' if CLEAN_MODE else 'мягкая'}, {CHECK_WORKERS} потоков...")
+        logger.info(f"Кандидатов: {len(raw)}. Проверка: РЕНТГЕН сегментов, "
+                    f"{CHECK_WORKERS} потоков...")
         samples = []
         check_counts = Counter()
         since_flush = 0
@@ -1557,7 +1577,7 @@ def update_cache():
         last_beat = time.time()
         total = len(raw)
         ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
-        futs = {ex.submit(check_one, ch, None, CLEAN_MODE): ch for ch in raw}
+        futs = {ex.submit(check_one, ch, None, True): ch for ch in raw}
         raw = None
         try:
             for f in as_completed(futs.keys(), timeout=CHECK_PHASE_MAX):
@@ -1638,20 +1658,20 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v6.3</title>
+<title>IPTV Russia Pro MAX v6.5</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
 h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
-.btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
-.btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
-.stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
-.stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
-.chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
+btn{display:inline-block;background:#4caf50;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-size:18px;font-weight:600;margin:8px 8px 8px 0}
+btn.blue{background:#2196f3}.btn.gray{background:#607d8b}.btn.orange{background:#ff7043}
+stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:24px 0}
+stat{background:rgba(255,255,255,.1);border-radius:12px;padding:14px;text-align:center}
+stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
+chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v6.3</h1>
-<div class="sub">🔧 гео-заглушка: OTT → зеркала • 🐢 щадящий Render • 🎨 лого+EPG</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v6.5</h1>
+<div class="sub">🔬 рентген при наборе = без крутилок • 🇷 RU-хосты вверх</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
