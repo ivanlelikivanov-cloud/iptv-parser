@@ -8,7 +8,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '7.4'
+VERSION = '7.5'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -257,25 +257,6 @@ BLOCK_MARKERS = ['roskomnadzor', 'zablokirovan', 'blocked', 'restricted',
                  'оплат', 'заблокирован', 'недоступен', 'роскомнадзор',
                  'на этой территории', 'territory']
 
-def get_mirrors():
-    try:
-        if os.path.exists('mirrors.json'):
-            with open('mirrors.json', encoding='utf-8') as f:
-                d = json.load(f)
-            return d.get('daily', []) + d.get('web', [])
-    except Exception:
-        pass
-    return []
-
-def get_proxy_list():
-    try:
-        if os.path.exists('proxy_list.json'):
-            with open('proxy_list.json', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return UA_POOL
-
 def proxy_url(u, ua=None, ref=None, base=None):
     q = (base or SELF_URL).rstrip('/') + '/proxy?url=' + quote(u, safe='')
     if ua: q += '&ua=' + quote(ua, safe='')
@@ -489,25 +470,6 @@ def push_reserve(key, url, ua='', ref=''):
         if c['url'] == url: return
     lst.append({'url': url, 'ua': ua or '', 'ref': ref or ''})
 
-def find_mirror(ch):
-    name = norm_name(ch['name'])
-    if name in RESERVE:
-        for c in RESERVE.get(name, []):
-            if c['url'] != ch['url'] and not is_ott_host(c['url']):
-                return c
-    for ua in get_proxy_list():
-        return {'url': ch['url'], 'ua': ua, 'ref': ''}
-    for page in get_mirrors():
-        try:
-            r = get_session().get(page, headers=polite_headers(), timeout=8, verify=False)
-            if r.status_code == 200:
-                text = r.text
-                if ch['url'] in text or ch['name'].lower() in text.lower():
-                    return {'url': ch['url'], 'ua': '', 'ref': ''}
-        except Exception:
-            pass
-    return None
-
 def heal_ott(alive, alive_urls):
     swapped = 0; kept = []
     for ch in alive:
@@ -523,16 +485,6 @@ def heal_ott(alive, alive_urls):
             alive_urls.add(pick['url'])
             SWEEP_VERDICT.pop(old, None); DEAD_STRIKES.pop(old, None)
             swapped += 1; kept.append(ch)
-        elif SWEEP_VERDICT.get(ch['url'], 0) > 0:
-            mirror = find_mirror(ch)
-            if mirror:
-                alive_urls.discard(ch['url'])
-                ch['url'] = mirror['url']; ch['ua'] = mirror['ua']; ch['ref'] = mirror['ref']
-                alive_urls.add(ch['url'])
-                SWEEP_VERDICT[ch['url']] = 0
-                DEAD_STRIKES.pop(ch['url'], None)
-                swapped += 1; kept.append(ch)
-                logger.info(f"🔄 Заменено зеркало: {ch['name'][:30]}")
     return kept, swapped
 
 def _parse_cached(data):
@@ -863,7 +815,6 @@ def check_one(ch, limit=None, deep=False):
             text = r2.text[:200000]
         except Exception: return 'blocked'
         if '#EXTM3U' not in text: return 'dead'
-        # промо-роллики и paywall-заглушки = конечный видеофайл (ENDLIST), живой эфир — нет
         if '#EXT-X-ENDLIST' in text: return 'vod'
         base = url.rsplit('/', 1)[0] + '/'
         seg = _first_media_uri(text, base)
@@ -1286,7 +1237,7 @@ def keepalive_worker():
 
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro v7.4</title>
+<title>IPTV Russia Pro v7.5</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1298,8 +1249,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🤖 IPTV Russia Pro v7.4</h1>
-<div class="sub">🚫 paywall/promo-детектор (ENDLIST) + токены пиратов</div>
+<h1>🤖 IPTV Russia Pro v7.5</h1>
+<div class="sub">🚫 без воскрешения трупов: мёртвый без зеркала = удалён</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
