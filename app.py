@@ -8,7 +8,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '7.3'
+VERSION = '7.4'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -90,7 +90,6 @@ STATIC_SOURCES = [
     "https://new.m3u.su/h", "https://new.m3u.su/mult",
     "https://iptv-org.github.io/iptv/regions/ru.m3u",
 ]
-
 HTML_SOURCES = [
     "https://m3u.su/", "https://m3u.su/m3u/", "https://new.m3u.su/",
     "https://sat-portal.com/plejlisty/", "https://6x6.msk.ru/", "https://homtv.ru/",
@@ -104,7 +103,6 @@ HTML_SOURCES = [
     "https://github.com/Free-iptv/iptv", "https://github.com/4mirror/iptv",
     "https://github.com/hmlendea/iptv-playlist-aggregator",
 ]
-
 GITHUB_QUERIES = ['iptv ru', 'iptv russia', 'iptv russian', 'm3u ru', 'm3u russia',
                   'iptv playlist ru', 'topic:iptv ru', 'iptv m3u8 ru', 'iptv снг', 'iptv cis']
 GH_COMMON_PATHS = ['ru.m3u', 'russia.m3u', 'iptv.m3u', 'tv.m3u', 'main.m3u', 'index.m3u',
@@ -119,9 +117,7 @@ FALLBACK_REGIONS = [
     "ru-kgd", "ru-mow", "ru-mos", "ru-spe", "ru-len", "ru-kda", "ru-ros",
     "ru-vgg", "ru-sta", "ru-da", "ru-sam", "ru-ud", "ru-ta", "ru-ba",
 ]
-
 CFG_MSG = "📚 источники вшиты"
-
 try:
     with open(SOURCES_FILE, encoding='utf-8') as f:
         _d = json.load(f)
@@ -223,12 +219,8 @@ stats = {
     "ott_swapped": 0, "ott_removed": 0,
 }
 agent_state = {
-    "status": "starting",
-    "self_updates": 0,
-    "worker_restarts": 0,
-    "oom_caught": 0,
-    "last_diagnosis": "init",
-    "last_check": 0,
+    "status": "starting", "self_updates": 0, "worker_restarts": 0,
+    "oom_caught": 0, "last_diagnosis": "init", "last_check": 0,
 }
 
 logging.basicConfig(
@@ -237,7 +229,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)],
 )
 logger = logging.getLogger(__name__)
-logger.info(f"🤖 Агент v{VERSION} активирован | {'RENDER' if IS_RENDER else 'LOCAL'} | CLEAN={CLEAN_MODE}")
+logger.info(f"🤖 Агент v{VERSION} | {'RENDER' if IS_RENDER else 'LOCAL'} | CLEAN={CLEAN_MODE}")
 
 HEADERS_WEB = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 HEADERS_PLAYER = {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'}
@@ -271,7 +263,7 @@ def get_mirrors():
             with open('mirrors.json', encoding='utf-8') as f:
                 d = json.load(f)
             return d.get('daily', []) + d.get('web', [])
-    except:
+    except Exception:
         pass
     return []
 
@@ -280,7 +272,7 @@ def get_proxy_list():
         if os.path.exists('proxy_list.json'):
             with open('proxy_list.json', encoding='utf-8') as f:
                 return json.load(f)
-    except:
+    except Exception:
         pass
     return UA_POOL
 
@@ -353,7 +345,6 @@ class CheckDB:
                 self.db.commit()
             except Exception as e:
                 logger.error(f"🗄 Ошибка записи: {e}")
-    def is_alive(self): return self._alive
 
 checkdb = CheckDB()
 
@@ -444,7 +435,7 @@ class MLBrain:
         rep, cnt = self.host_stats(host)
         heur = 0.5 * feats[2] + 0.3 * feats[3] + 0.2 * (1.0 - feats[5])
         try: p = self.model.prob(feats)
-        except: p = None
+        except Exception: p = None
         if p is None:
             return (SCORE_NOMODEL_REP * rep + SCORE_NOMODEL_HEUR * heur +
                     SCORE_NOMODEL_CNT * min(cnt / 10.0, 1.0))
@@ -457,7 +448,7 @@ class MLBrain:
         try:
             preds = [1 if self.model.prob(x) > 0.5 else 0 for x in X[:300]]
             acc = sum(1 for p, t in zip(preds, y[:300]) if p == t) / max(1, len(preds))
-        except: acc = None
+        except Exception: acc = None
         try:
             self.model.partial_fit(X, y)
             self.trained_samples += len(samples)
@@ -500,9 +491,8 @@ def push_reserve(key, url, ua='', ref=''):
 
 def find_mirror(ch):
     name = norm_name(ch['name'])
-    key = name if name in RESERVE else None
-    if key:
-        for c in RESERVE.get(key, []):
+    if name in RESERVE:
+        for c in RESERVE.get(name, []):
             if c['url'] != ch['url'] and not is_ott_host(c['url']):
                 return c
     for ua in get_proxy_list():
@@ -514,7 +504,7 @@ def find_mirror(ch):
                 text = r.text
                 if ch['url'] in text or ch['name'].lower() in text.lower():
                     return {'url': ch['url'], 'ua': '', 'ref': ''}
-        except:
+        except Exception:
             pass
     return None
 
@@ -537,15 +527,12 @@ def heal_ott(alive, alive_urls):
             mirror = find_mirror(ch)
             if mirror:
                 alive_urls.discard(ch['url'])
-                ch['url'] = mirror['url']
-                ch['ua'] = mirror['ua']
-                ch['ref'] = mirror['ref']
+                ch['url'] = mirror['url']; ch['ua'] = mirror['ua']; ch['ref'] = mirror['ref']
                 alive_urls.add(ch['url'])
                 SWEEP_VERDICT[ch['url']] = 0
                 DEAD_STRIKES.pop(ch['url'], None)
-                swapped += 1
-                kept.append(ch)
-                logger.info(f"🔄 Заменено зеркало: {ch['name'][:30]}...")
+                swapped += 1; kept.append(ch)
+                logger.info(f"🔄 Заменено зеркало: {ch['name'][:30]}")
     return kept, swapped
 
 def _parse_cached(data):
@@ -668,7 +655,9 @@ def fetch_github():
     try:
         for links in ex.map(read_readme, repos, timeout=90): found.update(links)
     except Exception: pass
-    finally: ex.shutdown(wait=False)
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     for full, branch in repos:
         base = f'https://raw.githubusercontent.com/{full}/{branch}'
         for path in GH_COMMON_PATHS: found.add(f'{base}/{path}')
@@ -696,7 +685,9 @@ def fetch_web_search():
     try:
         for links in ex.map(scrape, pages[:25], timeout=90): m3u.update(links)
     except Exception: pass
-    finally: ex.shutdown(wait=False)
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     return list(m3u)
 
 def fetch_telegram():
@@ -765,6 +756,9 @@ PAYWALL_WORDS = _clean(['подписк','subscription','оплат','payment','
 BLACKLIST_WORDS = _clean(['fifa','world cup','чемпионат мира','плей-офф'])
 RADIO_WORDS = _clean(['радио','radio','fm','дорожное','авторадио','ретро fm','europa plus','европа плюс',
                       'шансон','dfm','monte carlo','maximum','record','energy','relax fm','маяк','вести fm'])
+PAYWALL_RE = re.compile(
+    r'\b(liberty|ukr|ukraine|ott|ottclub|lapti|vinter|xtra|shara|iptvbox|boxtv|smarttv|'
+    r'smart tv|subscription|подписка|оплат|pay|ppv|premium|премиум|vip|вип|gold|platinum)\b', re.I)
 LATIN_RU_RE = re.compile(
     r'\b(?:rtr|planeta|pervyi|pervy|channel one|match tv|zvezda|karusel|carousel|'
     r'muz-tv|muz tv|ru\.tv|rutv|tv1000|ren tv|ntv|sts|tnt|rossiya|rossia|russia|'
@@ -779,7 +773,10 @@ JUNK_NAMES = {'index','index.m3u8','playlist','playlist.m3u8','live','test','str
 def is_radio(n): n=n.lower(); return any(w in n for w in RADIO_WORDS) or bool(re.search(r'\bfm\b', n))
 def is_adult(n): return any(w in n.lower() for w in ADULT_WORDS)
 def is_ukrainian(n): return any(w in n.lower() for w in UA_WORDS)
-def is_paywall(n): n=n.lower(); return any(w in n for w in PAYWALL_WORDS) or any(w in n for w in BLACKLIST_WORDS)
+def is_paywall(n):
+    n = n.lower()
+    if any(w in n for w in PAYWALL_WORDS) or any(w in n for w in BLACKLIST_WORDS): return True
+    return bool(PAYWALL_RE.search(n))
 def is_russian_like(n):
     if re.search(r'[\u0400-\u04FF]', n): return True
     return bool(LATIN_RU_RE.search(n))
@@ -866,6 +863,8 @@ def check_one(ch, limit=None, deep=False):
             text = r2.text[:200000]
         except Exception: return 'blocked'
         if '#EXTM3U' not in text: return 'dead'
+        # промо-роллики и paywall-заглушки = конечный видеофайл (ENDLIST), живой эфир — нет
+        if '#EXT-X-ENDLIST' in text: return 'vod'
         base = url.rsplit('/', 1)[0] + '/'
         seg = _first_media_uri(text, base)
         if not seg: return 'dead'
@@ -942,9 +941,6 @@ def flush_playlist(alive, elapsed=None, replace=False):
                 0 if is_hd(ch['name']) else 1, ch['name'].lower())
     alive_sorted = sorted(alive, key=sort_key)
     if not alive_sorted: return
-    if int(time.time()) % (4 * 3600) == 0:
-        stats['last_mirror_update'] = time.time()
-        flush_playlist(alive, replace=True)
     if len(alive_sorted) > MAX_ALIVE:
         good = [ch for ch in alive_sorted if SWEEP_VERDICT.get(ch['url'], 0) == 0]
         if len(good) >= MAX_ALIVE: alive_sorted = good[:MAX_ALIVE]
@@ -954,7 +950,7 @@ def flush_playlist(alive, elapsed=None, replace=False):
     cat_counts = Counter(ch['cat'] for ch in alive_sorted)
     lines = ['#EXTM3U url-tvg="' + EPG_URLS + '"',
              '# IPTV Russia Pro MAX v' + VERSION + ' | ' + time.strftime('%Y-%m-%d %H:%M'),
-             '# Живых: ' + str(len(alive_sorted)) + ' | без 18+/UA']
+             '# Живых: ' + str(len(alive_sorted)) + ' | без 18+/UA/paywall']
     for ch in alive_sorted:
         lines.append(ch['inf'])
         lines.append('#EXTVLCOPT:http-user-agent=VLC/3.0.20 LibVLC/3.0.20')
@@ -978,7 +974,9 @@ def quick_seed():
         for txt in ex.map(fetch_source_text, seed_sources, timeout=30):
             if txt: parse_m3u(txt, entries, seen, reasons)
     except Exception: pass
-    finally: ex.shutdown(wait=False)
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     raw = list(entries.values())[:1000]
     if not raw: return []
     alive = []; ex = ThreadPoolExecutor(max_workers=20)
@@ -991,7 +989,9 @@ def quick_seed():
             if is_ok(res): alive.append(ch)
             brain.record(urlparse(ch['url']).netloc, is_ok(res))
     except Exception: pass
-    finally: ex.shutdown(wait=False)
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     return alive
 
 def health_sweep():
@@ -1012,22 +1012,25 @@ def health_sweep():
                 SWEEP_VERDICT[ch['url']] = 0; DEAD_STRIKES.pop(ch['url'], None)
             else:
                 SWEEP_VERDICT[ch['url']] = 1; dead_n += 1
-                if CLEAN_MODE:
-                    n = DEAD_STRIKES.get(ch['url'], 0) + 1
-                    if n >= DEAD_LIMIT:
-                        key = norm_name(ch['name']); pick = None
-                        for c in RESERVE.get(key, []):
-                            if c['url'] != ch['url'] and c['url'] not in snap_urls and not is_ott_host(c['url']):
-                                pick = c; break
-                        if pick:
-                            ch['url'] = pick['url']; ch['ua'] = pick['ua']; ch['ref'] = pick['ref']
-                            snap_urls.add(pick['url']); SWEEP_VERDICT[ch['url']] = 0; swapped += 1
-                        else: dead_urls.add(ch['url'])
-                    else: DEAD_STRIKES[ch['url']] = n
+                n = DEAD_STRIKES.get(ch['url'], 0) + 1
+                if n >= DEAD_LIMIT:
+                    key = norm_name(ch['name']); pick = None
+                    for c in RESERVE.get(key, []):
+                        if c['url'] != ch['url'] and c['url'] not in snap_urls and not is_ott_host(c['url']):
+                            pick = c; break
+                    if pick:
+                        ch['url'] = pick['url']; ch['ua'] = pick['ua']; ch['ref'] = pick['ref']
+                        snap_urls.add(pick['url']); SWEEP_VERDICT[ch['url']] = 0; swapped += 1
+                    elif CLEAN_MODE:
+                        dead_urls.add(ch['url'])
+                else:
+                    DEAD_STRIKES[ch['url']] = n
             brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
     except TimeoutError: logger.warning("⏳ Свип таймаут")
     except Exception as e: logger.error(f"Свип: {e}")
-    finally: ex.shutdown(wait=False)
+    finally:
+        try: ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError: ex.shutdown(wait=False)
     save_verdicts()
     with cache_lock:
         stats['last_sweep'] = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -1036,20 +1039,9 @@ def health_sweep():
     if CLEAN_MODE and dead_urls:
         survivors = [ch for ch in snap if ch['url'] not in dead_urls]
         if survivors: flush_playlist(survivors, replace=True)
-        if swapped == 0 and dead_urls:
-            for ch in snap:
-                if ch['url'] in dead_urls and not is_ott_host(ch['url']):
-                    mirror = find_mirror(ch)
-                    if mirror:
-                        ch['url'] = mirror['url']
-                        ch['ua'] = mirror['ua']
-                        ch['ref'] = mirror['ref']
-                        SWEEP_VERDICT[ch['url']] = 0
-                        swapped += 1
-                        logger.info(f"🔄 Авто-зеркало: {ch['name'][:30]}...")
-            if swapped > 0:
-                flush_playlist(snap, replace=True)
     elif snap: flush_playlist(snap, replace=True)
+    logger.info(f"🩺 Итог: проверено {processed}, подозрительных {dead_n}, "
+                f"заменено {swapped}, удалено {len(dead_urls)}")
 
 def update_cache():
     global playlist_cache, is_updating, LOGO_MAP, RESERVE
@@ -1111,8 +1103,11 @@ def update_cache():
                 if txt: loaded += 1; parse_m3u(txt, entries, seen, reasons)
         except TimeoutError: logger.warning(f"⏳ Таймаут источников, успело {loaded}")
         except Exception as e: logger.error(f"Фаза источников: {e}")
-        finally: ex.shutdown(wait=False)
+        finally:
+            try: ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError: ex.shutdown(wait=False)
         with cache_lock: stats['filtered'] = dict(reasons)
+        logger.info(f"Фильтры вырезали: {dict(reasons)}")
         kw_pairs = [(ch['name'], ch['cat']) for ch in entries.values() if ch['cat'] != 'Общие']
         cat_net.train(train_pairs + kw_pairs)
         moved = apply_net(list(entries.values()))
@@ -1159,22 +1154,12 @@ def update_cache():
                     last_beat = time.time()
         except TimeoutError: logger.warning(f"⏳ Таймаут проверки ({CHECK_PHASE_MAX}с)")
         except Exception as e: logger.error(f"Фаза проверки: {e}")
-        finally: ex.shutdown(wait=False)
+        finally:
+            try: ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError: ex.shutdown(wait=False)
         with cache_lock: stats['check_counts'] = dict(check_counts)
+        logger.info(f"🔬 Проверка: {dict(check_counts)}")
         apply_net(alive)
-        if int(time.time()) % (4 * 3600) == 0:
-            for ch in alive[:500]:
-                reason = reject_reason(ch['name'], ch['url'])
-                if reason == 'geo' or is_ott_host(ch['url']) or not is_ok(check_one(ch, 10, True)):
-                    mirror = find_mirror(ch)
-                    if mirror:
-                        ch['url'] = mirror['url']
-                        ch['ua'] = mirror['ua']
-                        ch['ref'] = mirror['ref']
-                        SWEEP_VERDICT[ch['url']] = 0
-                        DEAD_STRIKES.pop(ch['url'], None)
-                        alive_urls.add(ch['url'])
-            logger.info("🌍 Обновлено 500 зеркал")
         before = len(alive)
         alive, sw = heal_ott(alive, alive_urls)
         rm = before - len(alive)
@@ -1301,7 +1286,7 @@ def keepalive_worker():
 
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro v7.3</title>
+<title>IPTV Russia Pro v7.4</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1313,8 +1298,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🤖 IPTV Russia Pro v7.3</h1>
-<div class="sub">🔄 система зеркал + прокси + агент</div>
+<h1>🤖 IPTV Russia Pro v7.4</h1>
+<div class="sub">🚫 paywall/promo-детектор (ENDLIST) + токены пиратов</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
