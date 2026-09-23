@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = '6.2'
+VERSION = '6.3'
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, 'playlist_disk.m3u')
@@ -175,6 +175,8 @@ SCORE_NOMODEL_REP, SCORE_NOMODEL_HEUR, SCORE_NOMODEL_CNT = 0.55, 0.25, 0.2
 CIS_COUNTRIES = {'RU', 'BY', 'KZ', 'KG', 'UZ', 'AM', 'AZ', 'GE', 'MD', 'TJ'}
 TRUSTED_HOSTS = {'iptv-org.github.io', 'raw.githubusercontent.com', 'new.m3u.su',
                  'm3u.su', 'webarmen.com', 'smolnp.github.io', 'iptv-list.mart.ru'}
+OTT_HOSTS = ('wink.ru', 'okko.tv', 'ivi.ru', 'more.tv', 'kion.ru', 'start.ru',
+             'premier.one', 'zabava.ru', 'rt.ru', 'rostelecom.ru')
 CAT_ORDER = ['Федеральные', 'Новости', 'Кино и сериалы', 'Спорт', 'Детские',
              'Музыка', 'Познавательные', 'Развлекательные', 'Региональные',
              'Радио', 'Общие']
@@ -198,8 +200,6 @@ SELF_URL = os.environ.get('RENDER_EXTERNAL_URL', 'http://127.0.0.1:10000')
 IS_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL'))
 CLEAN_MODE = os.environ.get('CLEAN', '0') == '1'
 
-#  Щадящий профиль для бесплатного Render (512 МБ): меньше потоков и пул,
-# иначе инстанс убивает процесс по памяти и плейлист сбрасывается.
 if IS_RENDER:
     SOURCE_WORKERS = 12
     CHECK_WORKERS = 40
@@ -221,6 +221,8 @@ alive_list = []
 SWEEP_VERDICT = {}
 DEAD_STRIKES = {}
 LOGO_MAP = {}
+RESERVE = {}
+RESERVE_CAP = 6
 cache_lock = threading.Lock()
 is_updating = False
 stats = {
@@ -230,6 +232,7 @@ stats = {
     "ml_samples": 0, "ml_accuracy": 0.0, "ml_on": True, "nb_moved": 0,
     "last_sweep": None, "sweep_removed": 0, "sweep_dead": 0, "host_blacklisted": 0,
     "geo_pairs": 0, "check_counts": {}, "clean_mode": CLEAN_MODE,
+    "ott_swapped": 0, "ott_removed": 0,
 }
 logging.basicConfig(
     level=logging.INFO,
@@ -513,6 +516,47 @@ def extract_features(ch):
         1.0 if 'iptv-org' in u else 0.0,
     ]
 
+def is_ott_host(url):
+    h = urlparse(url).netloc.lower()
+    return any(d in h for d in OTT_HOSTS)
+
+def push_reserve(key, url, ua='', ref=''):
+    if not key or is_ott_host(url):
+        return
+    lst = RESERVE.setdefault(key, [])
+    if len(lst) >= RESERVE_CAP:
+        return
+    for c in lst:
+        if c['url'] == url:
+            return
+    lst.append({'url': url, 'ua': ua or '', 'ref': ref or ''})
+
+def heal_ott(alive, alive_urls):
+    swapped = 0
+    kept = []
+    for ch in alive:
+        if not is_ott_host(ch['url']):
+            kept.append(ch)
+            continue
+        key = norm_name(ch['name'])
+        pick = None
+        for c in RESERVE.get(key, []):
+            if c['url'] not in alive_urls and not is_ott_host(c['url']):
+                pick = c
+                break
+        if pick:
+            alive_urls.discard(ch['url'])
+            old = ch['url']
+            ch['url'] = pick['url']
+            ch['ua'] = pick['ua']
+            ch['ref'] = pick['ref']
+            alive_urls.add(pick['url'])
+            SWEEP_VERDICT.pop(old, None)
+            DEAD_STRIKES.pop(old, None)
+            swapped += 1
+            kept.append(ch)
+    return kept, swapped
+
 def _parse_cached(data):
     chans = []
     cur_inf = ''
@@ -562,13 +606,14 @@ def load_disk_cache():
             n = data.count('\nhttp')
             if n > 0:
                 cleaned = [ch for ch in _parse_cached(data)
-                           if not reject_reason(ch['name'], ch['url'])]
+                           if not reject_reason(ch['name'], ch['url'])
+                           and not is_ott_host(ch['url'])]
                 with cache_lock:
                     playlist_cache = data
                     alive_list = cleaned
                     stats['alive_channels'] = len(cleaned)
                 logger.info(f"💾 Восстановлен плейлист: {len(cleaned)} каналов "
-                            f"(вычищено {n - len(cleaned)})")
+                            f"(вычищено {n - len(cleaned)}, включая OTT)")
     except Exception as e:
         logger.error(f"Дисковый кэш не читается: {e}")
 
@@ -838,7 +883,8 @@ LATIN_RU_RE = re.compile(
     r'tv centr|tv center|telekanal|shanson tv|retro tv|amedia|moscow 24|moskva 24|'
     r'peterburg|petersburg|len tv|kinopoisk|illuzion|rt)\b', re.I)
 BAD_URL_WORDS = _clean(['wink', 'okko.tv', 'ivi.ru', 'more.tv', 'kion.ru',
-                        'start.ru', 'premier.one', 'geoblock', 'geo-block'])
+                        'start.ru', 'premier.one', 'geoblock', 'geo-block',
+                        'zabava', 'rostelecom'])
 JUNK_WORDS = _clean(['webcam', 'камера', 'camera', 'без названия', 'безымянный', 'test channel', 'проверка'])
 JUNK_NAMES = {'index', 'index.m3u8', 'playlist', 'playlist.m3u8', 'live', 'test', 'stream',
               'video', 'm3u', 'channel', 'tv', '1', 'hd', 'fhd', '4k', 'main', 'default',
@@ -887,6 +933,8 @@ def reject_reason(name, url=''):
         return 'paywall'
     if url and is_bad_url(url):
         return 'geo'
+    if url and is_ott_host(url):
+        return 'ott'
     return None
 
 def get_category(name):
@@ -1088,7 +1136,10 @@ def parse_m3u(text, entries, seen_urls, reasons):
                     ch = {'inf': inf, 'url': line, 'cat': cat, 'name': current_name, 'ua': '', 'ref': ''}
                     key = norm_name(current_name)
                     if key in entries:
+                        push_reserve(key, line)
                         if is_hd(current_name) and not is_hd(entries[key]['name']):
+                            push_reserve(key, entries[key]['url'],
+                                         entries[key].get('ua', ''), entries[key].get('ref', ''))
                             entries[key] = ch
                     else:
                         entries[key] = ch
@@ -1285,7 +1336,9 @@ def health_sweep():
     logger.info(f"🩺 Проверка здоровья (рентген): {len(snapshot)} каналов, CLEAN={CLEAN_MODE}...")
     dead_n = 0
     processed = 0
+    swapped = 0
     dead_urls = set()
+    snap_urls = set(c['url'] for c in snapshot)
     ex = ThreadPoolExecutor(max_workers=SWEEP_WORKERS)
     futs = {ex.submit(check_one, ch, SWEEP_TIMEOUT, True): ch for ch in snapshot}
     try:
@@ -1305,7 +1358,24 @@ def health_sweep():
                 if CLEAN_MODE:
                     n = DEAD_STRIKES.get(ch['url'], 0) + 1
                     if n >= DEAD_LIMIT:
-                        dead_urls.add(ch['url'])
+                        key = norm_name(ch['name'])
+                        pick = None
+                        for c in RESERVE.get(key, []):
+                            if c['url'] != ch['url'] and c['url'] not in snap_urls \
+                                    and not is_ott_host(c['url']):
+                                pick = c
+                                break
+                        if pick:
+                            old = ch['url']
+                            ch['url'] = pick['url']
+                            ch['ua'] = pick['ua']
+                            ch['ref'] = pick['ref']
+                            snap_urls.add(pick['url'])
+                            DEAD_STRIKES.pop(old, None)
+                            SWEEP_VERDICT[ch['url']] = 0
+                            swapped += 1
+                        else:
+                            dead_urls.add(ch['url'])
                     else:
                         DEAD_STRIKES[ch['url']] = n
             brain.record(ch.get('host', urlparse(ch['url']).netloc), is_ok(res))
@@ -1331,7 +1401,7 @@ def health_sweep():
     elif snap:
         flush_playlist(snap, replace=True)
     logger.info(f"🩺 Итог: проверено {processed}/{len(snapshot)}, подозрительных {dead_n}, "
-                f"удалено {len(dead_urls)}")
+                f"заменено на зеркала {swapped}, удалено {len(dead_urls)}")
 
 def sweep_worker():
     while True:
@@ -1342,7 +1412,7 @@ def sweep_worker():
             logger.exception(f"🩺 Ошибка свипа: {e}")
 
 def update_cache():
-    global playlist_cache, is_updating, LOGO_MAP
+    global playlist_cache, is_updating, LOGO_MAP, RESERVE
     if is_updating:
         return False
     is_updating = True
@@ -1351,6 +1421,7 @@ def update_cache():
     try:
         api_channels, train_pairs, geo_pairs = fetch_iptv_org_api()
         LOGO_MAP = {}
+        RESERVE = {}
         for ach in api_channels:
             k = norm_name(ach['name'])
             if k and (ach.get('logo') or ach.get('cid')):
@@ -1400,7 +1471,10 @@ def update_cache():
             key = norm_name(name)
             new_ch = {'inf': inf, 'url': url, 'cat': cat, 'name': name, 'ua': ach['ua'], 'ref': ach['ref']}
             if key in entries:
+                push_reserve(key, url, ach['ua'], ach['ref'])
                 if is_hd(name) and not is_hd(entries[key]['name']):
+                    push_reserve(key, entries[key]['url'],
+                                 entries[key].get('ua', ''), entries[key].get('ref', ''))
                     entries[key] = new_ch
             else:
                 entries[key] = new_ch
@@ -1481,6 +1555,7 @@ def update_cache():
         checked = 0
         added = 0
         last_beat = time.time()
+        total = len(raw)
         ex = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
         futs = {ex.submit(check_one, ch, None, CLEAN_MODE): ch for ch in raw}
         raw = None
@@ -1508,7 +1583,7 @@ def update_cache():
                 samples.append((ch['feats'], 1 if ok else 0))
                 brain.record(ch['host'], ok)
                 if time.time() - last_beat > HEARTBEAT_SEC:
-                    logger.info(f"Прогресс: {checked}/{len(raw_len) if False else checked}, в плейлисте: {len(alive)} (+{added})")
+                    logger.info(f"Прогресс: {checked}/{total}, в плейлисте: {len(alive)} (+{added})")
                     last_beat = time.time()
         except TimeoutError:
             logger.warning(f"⏳ Таймаут проверки ({CHECK_PHASE_MAX}с)")
@@ -1523,6 +1598,14 @@ def update_cache():
             stats['check_counts'] = dict(check_counts)
         logger.info(f"🔬 Проверка: {dict(check_counts)}")
         apply_net(alive)
+        before = len(alive)
+        alive, sw = heal_ott(alive, alive_urls)
+        rm = before - len(alive)
+        if sw or rm:
+            logger.info(f"🔧 Гео-заглушка: заменено на зеркала {sw}, убрано OTT {rm}")
+        with cache_lock:
+            stats['ott_swapped'] = sw
+            stats['ott_removed'] = rm
         brain.train(samples)
         with cache_lock:
             stats['ml_samples'] = brain.trained_samples
@@ -1555,7 +1638,7 @@ def background_worker():
 HOME_TEMPLATE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTV Russia Pro MAX v6.2</title>
+<title>IPTV Russia Pro MAX v6.3</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .card{background:rgba(255,255,255,.08);backdrop-filter:blur(10px);border-radius:20px;padding:40px;max-width:640px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -1567,8 +1650,8 @@ h1{margin:0 0 8px;font-size:32px}.sub{opacity:.7;margin-bottom:24px}
 .stat b{display:block;font-size:24px}.stat span{opacity:.7;font-size:12px}
 .chip{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:6px 14px;margin:4px;font-size:13px}
 </style></head><body><div class="card">
-<h1>🇷 IPTV Russia Pro MAX 🧠 v6.2</h1>
-<div class="sub">🐢 щадящий режим Render • 🔬 рентген • 🎨 лого+EPG</div>
+<h1>🇷 IPTV Russia Pro MAX 🧠 v6.3</h1>
+<div class="sub">🔧 гео-заглушка: OTT → зеркала • 🐢 щадящий Render • 🎨 лого+EPG</div>
 <a class="btn" href="/playlist.m3u">📥 Плейлист</a>
 <a class="btn orange" href="/playlist.m3u?proxy=1">📡 PROXY</a>
 <a class="btn blue" href="/refresh">🔄 Обновить</a>
