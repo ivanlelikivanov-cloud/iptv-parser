@@ -1,4 +1,4 @@
-import os, re, time, json, hmac, hashlib, zlib, threading, logging, random
+import os, re, time, json, hmac, hashlib, zlib, threading, logging
 from collections import OrderedDict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, quote, urlunparse
@@ -9,7 +9,7 @@ from waitress import serve
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = "8.0"
+VERSION = "9.0"
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("iptv-pro")
 
@@ -96,8 +96,8 @@ KEYWORDS = {
                        "travel", "путешеств", "культура", "спас", "союз"],
     "Развлекательные": ["развлек", "entertainment", "comedy", "юмор", "квн", "шоу",
                         "lifestyle", "мода", "fashion"],
-    "Радио": ["радио", "radio", "fm", "шансон fm", "авторадио", "европа плюс",
-              "europa plus", "ретро fm", "маяк", "вести fm"],
+    "Радио": ["радио", "radio", "fm", "авторадио", "европа плюс", "europa plus",
+              "ретро fm", "маяк", "вести fm"],
 }
 REGION_WORDS = ("област", "край", "респуб", "округ", "район", "город", "регион",
                 "region", "oblast", "krai", "republic", "москва", "москв", "спб",
@@ -400,10 +400,20 @@ def load_local_playlist():
         logmsg(f"Ошибка чтения локального листа: {e}")
     return items
 
+M3U_LINK_RE = re.compile(r"https?://[^\s\"'<>]+")
+
+def find_m3u_links(text):
+    out = set()
+    for u in M3U_LINK_RE.findall(text):
+        u = u.rstrip(").,;]")
+        if urlparse(u).path.lower().endswith((".m3u", ".m3u8")):
+            out.add(u)
+    return out
+
 def fetch_source(url):
     try:
         r = requests.get(url, timeout=SOURCE_TIMEOUT, stream=True, verify=False,
-                         headers={"User-Agent": "Mozilla/5.0 IPTV-Russia-Pro/8.0"})
+                         headers={"User-Agent": "Mozilla/5.0 IPTV-Russia-Pro/9.0"})
         if r.status_code != 200:
             return []
         chunks = []
@@ -436,8 +446,7 @@ def fetch_html_links():
                 if total > 300000:
                     break
             r.close()
-            return set(re.findall(r"(https?://[^\s\"'<>]+?\.m3u8?)",
-                                  b"".join(chunks).decode("utf-8", "ignore"), re.I))
+            return find_m3u_links(b"".join(chunks).decode("utf-8", "ignore"))
         except Exception:
             return set()
     with ThreadPoolExecutor(max_workers=6) as ex:
@@ -480,8 +489,7 @@ def fetch_telegram():
                     if total > 300000:
                         break
                 r.close()
-                found.update(re.findall(r"(https?://[^\s\"'<>]+?\.m3u8?)",
-                                        b"".join(chunks).decode("utf-8", "ignore"), re.I))
+                found.update(find_m3u_links(b"".join(chunks).decode("utf-8", "ignore")))
             else:
                 r.close()
         except Exception:
@@ -490,17 +498,15 @@ def fetch_telegram():
 
 def fetch_web():
     found = set()
-    pages = []
     for q in WEB_QUERIES:
         try:
             r = requests.get("https://html.duckduckgo.com/html/", params={"q": q},
                              timeout=(5, 15), headers={"User-Agent": "Mozilla/5.0"})
             if r.status_code == 200:
-                found.update(re.findall(r"(https?://[^\s\"'<>]+?\.m3u8?)", r.text, re.I))
-                pages += [x for x in re.findall(r"uddg=([^&\"]+)", r.text)][:5]
+                found.update(find_m3u_links(r.text))
         except Exception:
             continue
-    return list(found) | set(), pages
+    return list(found)
 
 def fetch_api():
     global API_META
@@ -537,8 +543,7 @@ def fetch_api():
                 m = meta.get(cid, {})
                 nk = norm_name(names[cid])
                 API_META[nk] = {"logo": m.get("logo", ""), "tvg_id": m.get("cid", ""),
-                                "ua": s.get("user_agent") or "", "ref": s.get("http_referrer") or "",
-                                "cat": m.get("cat", "")}
+                                "ua": s.get("user_agent") or "", "ref": s.get("http_referrer") or ""}
                 items.append({"name": names[cid], "url": normalize_url(url),
                               "tvg_id": m.get("cid", ""), "logo": m.get("logo", ""),
                               "group": m.get("cat", ""), "ua": s.get("user_agent") or "",
@@ -767,8 +772,7 @@ def update_playlist(force=False):
         ok_sources = 0
         urls = list(SOURCE_URLS)
         try:
-            extra, _ = fetch_web()
-            urls += list(extra)
+            urls += fetch_web()
         except Exception:
             pass
         with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as ex:
@@ -828,8 +832,7 @@ def update_playlist(force=False):
             kept.append(x)
         candidates = kept
         to_check = candidates[:CHECK_LIMIT]
-        logmsg(f"Кандидатов: {len(candidates)}; проверяем: {len(to_check)}; "
-               f"фильтры: {dict(reasons)}")
+        logmsg(f"Кандидатов: {len(candidates)}; проверяем: {len(to_check)}; фильтры: {dict(reasons)}")
         alive = []
         verdicts = Counter()
         with ThreadPoolExecutor(max_workers=CHECK_WORKERS) as ex:
