@@ -1,7 +1,8 @@
-import os, re, time, json, hmac, hashlib, zlib, threading, logging
+import os, re, time, json, hmac, hashlib, zlib, threading, logging, gzip
 from collections import OrderedDict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, quote, urlunparse
+from xml.etree import ElementTree as ET
 import requests
 import urllib3
 from flask import Flask, Response, jsonify, request, abort
@@ -9,11 +10,10 @@ from waitress import serve
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
-VERSION = "9.1"
+VERSION = "9.2"
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("iptv-pro")
 
-# -------------------- CONFIG --------------------
 PORT = int(os.getenv("PORT", "10000"))
 SELF_URL = (os.getenv("SELF_URL", "") or os.getenv("RENDER_EXTERNAL_URL", "")).rstrip("/")
 DATA_FILE = os.getenv("PLAYLIST_FILE", "playlist_disk.m3u")
@@ -60,6 +60,16 @@ BLOCK_MARKERS = ("roskomnadzor", "zablokirovan", "blocked", "restricted", "forbi
                  "captcha", "cloudflare", "access denied", "оплат", "заблокирован",
                  "недоступен", "роскомнадзор", "на этой территории", "territory")
 
+ALLOWED_COUNTRIES = {"RU", "BY", "KZ", "KG", "UZ", "AM", "AZ", "GE", "MD", "TJ", "TM"}
+ALLOWED_LANGS = {"rus", "bel", "kaz", "uzb", "kir", "tgk", "tuk", "aze", "arm", "kat", "ron", "tat", "bak", "chv", "udm", "sah", "che"}
+FOREIGN_TVG_RE = re.compile(r"\b(it\.|fr\.|de\.|es\.|cn\.|jp\.|kr\.|ar\.|sa\.|eg\.|ir\.|tr\.|in\.|pk\.|br\.|mx\.|ar\.)", re.I)
+LATIN_RU_RE = re.compile(
+    r"\b(?:rtr|planeta|pervyi|pervy|channel one|match tv|zvezda|karusel|carousel|"
+    r"muz-tv|muz tv|ru\.tv|rutv|tv1000|ren tv|ntv|sts|tnt|rossiya|rossia|russia|"
+    r"vesti|izvestia|kultura|soyuz|spas|domashniy|pyatnitsa|subbota|mir tv|otr|"
+    r"tv centr|tv center|telekanal|shanson tv|retro tv|amedia|moscow 24|moskva 24|"
+    r"peterburg|petersburg|len tv|kinopoisk|illuzion|rt)\b", re.I)
+
 CATEGORY_ORDER = ["Федеральные", "Новости", "Кино и сериалы", "Спорт", "Детские",
                   "Музыка", "Познавательные", "Развлекательные", "Региональные",
                   "Радио", "Общие"]
@@ -83,8 +93,8 @@ CATEGORY_MAP = {
     "education": "Познавательные", "science": "Познавательные",
     "travel": "Познавательные", "познавательные": "Познавательные",
     "познавательный": "Познавательные", "документальные": "Познавательные",
-    "документальный": "Познавательные", "документальные фильмы": "Познавательные",
-    "наука": "Познавательные", "образование": "Познавательные",
+    "документальный": "Познавательные", "наука": "Познавательные",
+    "образование": "Познавательные",
     "entertainment": "Развлекательные", "comedy": "Развлекательные",
     "lifestyle": "Развлекательные", "развлекательные": "Развлекательные",
     "развлекательный": "Развлекательные", "развлечения": "Развлекательные",
@@ -159,6 +169,30 @@ KEYWORDS = {
                         "экстрасенс", "астролог", "гороскоп", "сатир", "анекдот",
                         "прикол"],
 }
+EPG_GENRE_MAP = {
+    "Спорт": ["sport", "футбол", "хоккей", "баскетбол", "теннис", "бокс", "единоборств",
+              "гонк", "матч", "olympic", "олимп", "biathlon", "биатлон", "ski", "лыжн",
+              "football", "soccer", "hockey", "basketball", "tennis", "boxing", "racing",
+              "wrestling", "борьба", "фитнес", "fitness"],
+    "Новости": ["news", "новост", "информац", "information", "обзор", "review",
+                "bulletin", "политик", "politic", "экономик", "economics", "события"],
+    "Кино и сериалы": ["film", "фильм", "movie", "cinema", "кино", "serial", "сериал",
+                       "series", "episode", "эпизод", "drama", "драма", "comedy film",
+                       "боевик", "action", "horror", "ужас", "thriller", "триллер",
+                       "melodrama", "мелодрам", "detective", "детектив"],
+    "Детские": ["children", "детск", "kids", "мульт", "cartoon", "анимац", "animation",
+                "fairy", "сказк", "toddler", "малыш", "puppet", "кукол", "preschool"],
+    "Музыка": ["music", "музык", "concert", "концерт", "clip", "клип", "karaoke", "караоке",
+               "rock", "рок", "pop", "поп", "jazz", "джаз", "opera", "опера", "ballet", "балет"],
+    "Познавательные": ["documentary", "документ", "science", "наук", "history", "история",
+                       "nature", "природ", "wildlife", "животн", "travel", "путешеств",
+                       "education", "образован", "culture", "культур", "art", "искусств",
+                       "cooking", "кулинар", "health", "здоров", "medicine", "медицин",
+                       "technology", "технолог", "space", "космос", "religion", "религи"],
+    "Развлекательные": ["entertainment", "развлек", "show", "шоу", "game", "игр",
+                        "reality", "реалит", "talk show", "ток-шоу", "fashion", "мод",
+                        "lifestyle", "стиль"],
+}
 TVGID_MAP = [
     ("kid", "Детские"), ("child", "Детские"), ("cartoon", "Детские"),
     ("disney", "Детские"), ("nick", "Детские"), ("boomerang", "Детские"),
@@ -191,7 +225,7 @@ REGION_WORDS = ("област", "край", "респуб", "округ", "ра�
                 "санкт-петербург", "ленинград", "татарстан", "башкортостан", "якут",
                 "саха", "чечен", "дагестан", "бурят", "удмурт", "коми", "крым",
                 "минск", "беларусь", "алматы", "астана", "ташкент", "баку",
-                "ереван", "губерния", "столица", "поморье", "донбасс? нет")
+                "ереван", "губерния", "столица")
 API_CAT_MAP = [
     (["radio"], "Радио"), (["kids", "animation"], "Детские"),
     (["news", "business"], "Новости"), (["sports"], "Спорт"),
@@ -204,6 +238,16 @@ API_CAT_MAP = [
 EPG_URLS = ("https://iptv-org.github.io/epg/guides/ru.xml.gz,"
             "https://iptv-org.github.io/epg/guides/by.xml.gz,"
             "https://iptv-org.github.io/epg/guides/kz.xml.gz")
+EPG_SOURCES = [
+    "https://iptv-org.github.io/epg/guides/ru.xml.gz",
+    "https://iptv-org.github.io/epg/guides/by.xml.gz",
+    "https://iptv-org.github.io/epg/guides/kz.xml.gz",
+    "https://iptv-org.github.io/epg/guides/kg.xml.gz",
+    "https://iptv-org.github.io/epg/guides/uz.xml.gz",
+    "https://iptv-org.github.io/epg/guides/am.xml.gz",
+    "https://iptv-org.github.io/epg/guides/az.xml.gz",
+    "https://iptv-org.github.io/epg/guides/ge.xml.gz",
+]
 
 SOURCE_URLS = [
     "https://iptv-org.github.io/iptv/countries/ru.m3u",
@@ -230,7 +274,6 @@ SOURCE_URLS = [
     "https://iptv-org.github.io/iptv/languages/tgk.m3u",
     "https://iptv-org.github.io/iptv/languages/arm.m3u",
     "https://iptv-org.github.io/iptv/languages/aze.m3u",
-    "https://raw.githubusercontent.com/iptv-org/iptv/master/index.m3u",
     "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ru.m3u",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
     "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_russia.m3u8",
@@ -287,8 +330,11 @@ PAYWALL_URLS = set()
 HASH_URLS = {}
 HOSTREP = {}
 API_META = {}
+EPG_CACHE = {}
+EPG_LAST = 0
 _hash_lock = threading.Lock()
 _rep_lock = threading.Lock()
+_epg_lock = threading.Lock()
 proxy_sem = threading.BoundedSemaphore(MAX_PROXY_CONNECTIONS)
 
 def logmsg(msg):
@@ -384,12 +430,38 @@ def is_hd(name):
     n = (name or "").lower()
     return "hd" in n or "4k" in n or "uhd" in n or "fhd" in n
 
-def reject_reason(name, url):
+def has_cyrillic(s):
+    return bool(re.search(r"[\u0400-\u04FF]", s or ""))
+
+def is_russian_like(name, country="", language="", tvg_id=""):
+    if has_cyrillic(name):
+        return True
+    if LATIN_RU_RE.search(name or ""):
+        return True
+    if country and any(c.strip().upper() in ALLOWED_COUNTRIES for c in country.split(";")):
+        return True
+    if language and any(l.strip().lower() in ALLOWED_LANGS for l in language.split(";")):
+        return True
+    if tvg_id and (tvg_id.lower().startswith("ru.") or ".ru" in tvg_id.lower() or
+                   "russia" in tvg_id.lower() or "moscow" in tvg_id.lower()):
+        return True
+    return False
+
+def is_foreign_tvg(tvg_id):
+    return bool(FOREIGN_TVG_RE.search(tvg_id or ""))
+
+def reject_reason(item):
+    name = item.get("name", "")
+    url = item.get("url", "")
+    group = item.get("group", "")
+    country = item.get("country", "")
+    language = item.get("language", "")
+    tvg_id = item.get("tvg_id", "")
     if url and url in PAYWALL_URLS:
         return "paywall"
     if is_junk(name):
         return "junk"
-    if is_nsfw(name):
+    if is_nsfw(name, group):
         return "nsfw"
     if is_ukrainian(name):
         return "ua"
@@ -399,6 +471,10 @@ def reject_reason(name, url):
         return "geo"
     if url and is_ott_host(url):
         return "ott"
+    if tvg_id and is_foreign_tvg(tvg_id):
+        return "foreign"
+    if not is_russian_like(name, country, language, tvg_id):
+        return "not_ru"
     return None
 
 def host_rep(host):
@@ -432,6 +508,95 @@ def canonical_custom_category(group, custom_categories):
             return c
     return ""
 
+def refresh_epg():
+    global EPG_CACHE, EPG_LAST
+    if time.time() - EPG_LAST < 6 * 3600 and EPG_CACHE:
+        return
+    logmsg("📡 EPG: загрузка телепрограммы...")
+    new_cache = {}
+    for url in EPG_SOURCES:
+        try:
+            r = requests.get(url, timeout=30, stream=True, verify=False,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                r.close()
+                continue
+            chunks = []
+            total = 0
+            for c in r.iter_content(65536):
+                chunks.append(c)
+                total += len(c)
+                if total > 40 * 1024 * 1024:
+                    break
+            r.close()
+            data = b"".join(chunks)
+            try:
+                xml_text = gzip.decompress(data).decode("utf-8", "ignore")
+            except Exception:
+                xml_text = data.decode("utf-8", "ignore")
+            try:
+                root = ET.fromstring(xml_text)
+            except Exception:
+                continue
+            for prog in root.findall("programme"):
+                ch_id = (prog.get("channel") or "").lower()
+                if not ch_id:
+                    continue
+                titles = []
+                for t in prog.findall("title"):
+                    if t.text:
+                        titles.append(t.text)
+                cats = []
+                for c in prog.findall("category"):
+                    if c.text:
+                        cats.append(c.text.lower())
+                subtitle = ""
+                st = prog.find("sub-title")
+                if st is not None and st.text:
+                    subtitle = st.text
+                desc = ""
+                d = prog.find("desc")
+                if d is not None and d.text:
+                    desc = d.text
+                entry = new_cache.setdefault(ch_id, {"titles": [], "cats": [], "desc": ""})
+                entry["titles"].extend(titles)
+                entry["cats"].extend(cats)
+                if desc and not entry["desc"]:
+                    entry["desc"] = desc
+                if subtitle and not entry["desc"]:
+                    entry["desc"] = subtitle
+        except Exception as e:
+            logmsg(f"EPG источник ошибка: {e}")
+    with _epg_lock:
+        EPG_CACHE = new_cache
+        EPG_LAST = time.time()
+    logmsg(f"📡 EPG: загружено {len(EPG_CACHE)} каналов с программой")
+
+def epg_classify(tvg_id, name=""):
+    if not tvg_id:
+        return ""
+    key = tvg_id.lower()
+    if not key.startswith("ru.") and ".ru" not in key:
+        for candidate in EPG_CACHE.keys():
+            if key in candidate or candidate in key:
+                key = candidate
+                break
+    entry = EPG_CACHE.get(key)
+    if not entry:
+        return ""
+    text = " ".join(entry["titles"][:30]).lower() + " " + " ".join(entry["cats"][:20]) + " " + (entry.get("desc", "") or "").lower()
+    scores = Counter()
+    for cat, words in EPG_GENRE_MAP.items():
+        for w in words:
+            if w in text:
+                scores[cat] += 1
+    if not scores:
+        return ""
+    top = scores.most_common(2)
+    if len(top) == 1 or top[0][1] >= top[1][1] * 1.5:
+        return top[0][0]
+    return top[0][0]
+
 def guess_category(item, custom_categories):
     c = canonical_custom_category(item.get("group", ""), custom_categories)
     if c:
@@ -449,6 +614,9 @@ def guess_category(item, custom_categories):
     for token, cat in TVGID_MAP:
         if token in tvgid:
             return cat
+    epg_cat = epg_classify(item.get("tvg_id", ""), name)
+    if epg_cat:
+        return epg_cat
     for category, words in KEYWORDS.items():
         if any(w in nl or w in tvgid for w in words):
             return category
@@ -477,6 +645,8 @@ def parse_m3u(text, source=""):
                 "tvg_id": attr(line, "tvg-id"),
                 "logo": attr(line, "tvg-logo"),
                 "group": attr(line, "group-title"),
+                "language": attr(line, "tvg-language"),
+                "country": attr(line, "tvg-country"),
                 "ua": attr(line, "user-agent"),
                 "ref": attr(line, "referrer"),
                 "source": source,
@@ -515,7 +685,7 @@ def find_m3u_links(text):
 def fetch_source(url):
     try:
         r = requests.get(url, timeout=SOURCE_TIMEOUT, stream=True, verify=False,
-                         headers={"User-Agent": "Mozilla/5.0 IPTV-Russia-Pro/9.1"})
+                         headers={"User-Agent": "Mozilla/5.0 IPTV-Russia-Pro/9.2"})
         if r.status_code != 200:
             return []
         chunks = []
@@ -627,7 +797,7 @@ def fetch_api():
                 continue
             name = ch.get("name", "")
             langs = [l.get("code") if isinstance(l, dict) else l for l in (ch.get("languages") or [])]
-            if ch.get("country") in ("RU", "BY", "KZ", "KG", "UZ", "AM", "AZ", "GE", "MD", "TJ") or "rus" in langs:
+            if ch.get("country") in ALLOWED_COUNTRIES or "rus" in langs:
                 names[ch.get("id")] = name
                 cats = ch.get("categories") or []
                 cat = ""
@@ -635,7 +805,9 @@ def fetch_api():
                     if any(k in cats for k in keys):
                         cat = c
                         break
-                meta[ch.get("id")] = {"logo": ch.get("logo") or "", "cid": ch.get("id") or "", "cat": cat}
+                meta[ch.get("id")] = {"logo": ch.get("logo") or "", "cid": ch.get("id") or "",
+                                       "cat": cat, "country": ch.get("country") or "",
+                                       "langs": langs}
         items = []
         API_META = {}
         for s in st_r.json():
@@ -650,7 +822,8 @@ def fetch_api():
                 items.append({"name": names[cid], "url": normalize_url(url),
                               "tvg_id": m.get("cid", ""), "logo": m.get("logo", ""),
                               "group": m.get("cat", ""), "ua": s.get("user_agent") or "",
-                              "ref": s.get("http_referrer") or "", "source": "api"})
+                              "ref": s.get("http_referrer") or "", "country": m.get("country", ""),
+                              "language": ";".join(m.get("langs", [])), "source": "api"})
         logmsg(f"API iptv-org: {len(items)} потоков РФ/СНГ")
         return items
     except Exception as e:
@@ -869,6 +1042,7 @@ def update_playlist(force=False):
     started = time.time()
     try:
         logmsg("=== НАЧАЛО ОБНОВЛЕНИЯ ===")
+        refresh_epg()
         local = load_local_playlist()
         state["custom_categories"] = load_category_set(local)
         all_items = list(local)
@@ -906,7 +1080,7 @@ def update_playlist(force=False):
             u = x.get("url")
             if not u:
                 continue
-            reason = reject_reason(x.get("name", ""), u)
+            reason = reject_reason(x)
             if reason:
                 reasons[reason] += 1
                 continue
@@ -978,6 +1152,8 @@ def update_playlist(force=False):
                 "alive": len(alive),
                 "output": len(output),
                 "paywall_db": len(PAYWALL_URLS),
+                "epg_channels": len(EPG_CACHE),
+                "filtered": dict(reasons),
                 "categories": dict(cats),
                 "seconds": round(time.time() - started, 1),
             }
@@ -1025,11 +1201,11 @@ def index():
 .box{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:18px;margin:12px 0}}
 a{{color:#58a6ff}} .ok{{color:#3fb950}} table{{width:100%;border-collapse:collapse}}
 td,th{{padding:7px;border-bottom:1px solid #30363d;text-align:left}}</style>
-</head><body><h1>📺 IPTV Russia Pro v{VERSION} «ПУШКА»</h1>
+</head><body><h1>📺 IPTV Russia Pro v{VERSION} «ЧИСТКА»</h1>
 <div class='box'><b>Статус:</b> {'ОБНОВЛЯЕТСЯ' if updating else 'ГОТОВ'}<br>
 Каналов в выдаче: <b>{st.get('output', 0)}</b><br>
 Проверено: {st.get('checked', 0)} → живых/блок: <b class='ok'>{st.get('alive', 0)}</b><br>
-Вердикты: {st.get('verdicts', {})}<br>
+EPG-каналов с программой: {st.get('epg_channels', 0)}<br>
 Paywall-база: {st.get('paywall_db', 0)}<br>
 Источников OK: {st.get('source_ok', 0)}/{st.get('sources', 0)}<br>
 Последнее обновление: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last)) if last else 'ещё не было'}</div>
@@ -1037,6 +1213,9 @@ Paywall-база: {st.get('paywall_db', 0)}<br>
 <a href='/playlist.m3u?proxy=1'>▶ playlist через PROXY</a> &nbsp;|&nbsp;
 <a href='/api/status'>API status</a> &nbsp;|&nbsp;
 <a href='/api/update'>Обновить</a></div>
+<div class='box'><h3>Отфильтровано</h3><table><tr><th>Причина</th><th>Каналов</th></tr>
+{''.join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in st.get('filtered', {}).items())}
+</table></div>
 <div class='box'><h3>Категории</h3><table><tr><th>Категория</th><th>Каналов</th></tr>
 {''.join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in st.get('categories', {}).items())}
 </table></div></body></html>"""
